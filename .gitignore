@@ -1,0 +1,8 @@
+.spyproject/
+process/models/
+process/data/
+*tar.gz
+stream/data/
+stream/tmp/
+__pycache__
+.ipynb_checkpoints
