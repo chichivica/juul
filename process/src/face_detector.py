@@ -9,6 +9,12 @@ import os, sys
 from tqdm import tqdm
 import pickle
 import time
+import tracemalloc
+import linecache
+#from multiprocessing import Process, Queue
+from threading import Thread
+from queue import Queue
+from queue import Empty as QueueEmpty
 #from mtcnn.mtcnn import MTCNN
 import dlib
 import tensorflow as tf
@@ -24,9 +30,11 @@ from src.mobilenet_ssd import get_detection_graph, graph_detect_faces
 FACE_CONFIDENCE = 0.69
 EVERY_NTH_FRAME = 3
 VIDEO_PATH = 'data/raw/2019-06-21/'
-DETECTED_FACES = 'data/interim/test/'
-WRITE_EMBEDDINGS = 'data/interim/embeddings/test.pkl'
+DETECTED_FACES = 'data/interim/juul/'
+WRITE_EMBEDDINGS = 'data/interim/embeddings/juul_mobilenet_dlib_2019-06-26.pkl'
 VIDEO_EXTENSIONS = ['mp4']
+FPS = 20.0
+WINDOW_DIMS = (2688,1520)
 CODEC = 'mp4v'
 RECOGNITION_MODEL_PATH = '/home/neuro/dlib/dlib_face_recognition_resnet_model_v1.dat'
 SHAPE_PREDICTOR_PATH = '/home/neuro/dlib/shape_predictor_5_face_landmarks.dat'
@@ -36,6 +44,9 @@ FILE_DEPTH = 2
 
 
 class EmptyVideoException(Exception):
+    pass
+
+class NoFaceDetectedException(Exception):
     pass
 
 class FaceEmbeddings:
@@ -53,7 +64,7 @@ class FaceEmbeddings:
             save cropped faces and detection video if required
     '''
     def __init__(self, output_dir, embeddings_path, codec, batch_size, 
-                 face_confidence, skip_frames=1, 
+                 face_confidence, skip_frames=1, window_dims=(1280,720), fps=20.0,
                  save_crops=True, make_video=False):
         self.skip_frames = skip_frames
         self.codec = codec
@@ -63,6 +74,10 @@ class FaceEmbeddings:
         self.save_crops = save_crops
         self.make_video = make_video
         self.embeddings_path = embeddings_path
+        self.window_dims = window_dims
+        self.fps = fps
+        self.print_time = True
+        self.debug = True
     
     def load_detector(self, model_path):
         '''
@@ -82,31 +97,39 @@ class FaceEmbeddings:
                             '{} does not exist'.format(shape_predictor_path)
             self.shape_predictor = dlib.shape_predictor(shape_predictor_path)
             
-    def get_frames(self, video_file):
+    def get_frames(self, video_file, queue):
         '''
         Read frames from a video file and return a list of frames
         with a skip factor
         '''
         assert os.path.exists(video_file), '{} does not exist'.format(video_file)
         cap = cv2.VideoCapture(video_file)
-        self.window_dims = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                            int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        self.fps = cap.get(cv2.CAP_PROP_FPS)
         frame_num = 0
-        frames = []
+        batch = []
         while cap.isOpened():
             ret, frame = cap.read()
+            # if unable to read then quit and add last batch to queue
             if not ret:
-                print(f'Could not read {frame_num} frame from {video_file}')
+                if len(batch) > 0:
+                    queue.put(batch)
+                if self.debug:
+                    print(f'Could not read {frame_num} frame from {video_file}')
                 break
+            # take every n-th frame
             if frame_num % self.skip_frames == 0:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frames.append(frame)
+                batch.append(frame)
+                # add batch to queue
+                if len(batch) % self.batch_size == 0:
+                    queue.put(batch)
+                    if self.debug: print('New batch added', queue.qsize())
+                    batch = []
+                    time.sleep(queue.qsize())
             frame_num += 1
+        queue.put(None)
         cap.release()
-        if len(frames) == 0:
-            raise Exception('Could not open {}'.format(video_file))
-        return frames
+        if frame_num == 0:
+            raise EmptyVideoException
 
     def init_video_writer(self, filename):
         '''
@@ -119,8 +142,7 @@ class FaceEmbeddings:
         self.writer = cv2.VideoWriter(write_video, fourcc, self.fps,
                                       self.window_dims)
         
-        
-    def detect_faces(self, frames, print_time=False):
+    def detect_faces(self, frames,):
         '''
         Detect faces by batches of frames
         Select faces with high confidence
@@ -134,13 +156,13 @@ class FaceEmbeddings:
                 start_time = time.time()
                 boxes, scores, indices = \
                         graph_detect_faces(self.detector, sess, frames, 
-                                           self.batch_size, self.face_confidence)
+                                           self.face_confidence)
                 duration = time.time() - start_time
-                if print_time:
+                if self.print_time:
                     print(f'{duration:.4f} seconds for {len(frames)} frames')
         return boxes, scores, indices
 
-    def compute_embeddings(self, images, rectangle_points, print_time=False):
+    def compute_embeddings(self, images, rectangle_points,):
         '''
         Prepare image for dlib's face recognition model:
             1. create rectangle object
@@ -158,7 +180,7 @@ class FaceEmbeddings:
         embeddings = self.recognizer.compute_face_descriptor(face_chips,
                                                             num_jitters=10)
         duration = time.time() - start_time
-        if print_time:
+        if self.print_time:
             print(f'{duration:.4f} sec for {len(embeddings)} embeddings')
         return np.array(embeddings)
     
@@ -210,7 +232,7 @@ class FaceEmbeddings:
         
         
     @staticmethod
-    def serialize_data(filepath, data, mode):
+    def serialize_data(filepath, data, mode, debug=False):
         '''
         Saves embeddings with timestamps and related cropped face
         '''
@@ -220,58 +242,121 @@ class FaceEmbeddings:
                 pkl_file = pickle.load(f)
             for k,v in data.items():
                 pkl_file[k].extend(v)
-                pkl_file[k].extend(v)
             with open(filepath, 'wb') as f:
                 pickle.dump(pkl_file, f)
+                if debug: print('Dumped', len(pkl_file[k]), mode)
         else:
             with open(filepath, mode) as f:
                 pickle.dump(data, f)
+                if debug: print('Dumped', len(data[list(data.keys())[0]]), mode)
         
     
-    def run_video(self, video_path, embeddings_path, mode):
+    def run_video(self, video_path):
         '''
         Run 1 video pipeline
         '''
         base_name = os.path.basename(video_path)
         video_name = base_name.split('.')[0]
         assert self.detector and self.recognizer, 'Load models first'
-        frames = self.get_frames(video_path)
-        rects, scores, indices = self.detect_faces(frames, True)
-        if len(rects) == 0:
-            raise EmptyVideoException
-        face_images = [frames[i] for i,_ in indices]
-        assert len(rects) == len(scores) == len(indices) == len(face_images),\
-                                'Error in lengths of rects/scores/indices/images'
-        embeddings = self.compute_embeddings(face_images, rects, True)
-        cropped_paths = []
-        if self.save_crops:
-            cropped_paths = self.save_cropped_faces(face_images, rects, indices, video_name)
-        if self.make_video:
-            self.init_video_writer(base_name)
-            self.save_video(frames, indices, rects, scores)
-        timestamps = [self.get_timestamp(int(video_name), int(f), self.fps) 
-                        for f,_ in indices]
-        sizes = [(right - left, bottom - top) for (left,top,right,bottom) in
-                 rects]
-        self.serialize_data(embeddings_path, 
-                          {'embeddings' : list(embeddings),
-                           'image_paths': list(cropped_paths),
-                           'timestamps':timestamps, 
-                           'sizes': sizes},
-                           mode)
+        # define queue to store batches and subprocess to read frames from video
+        queue = Queue(maxsize=10)
+#        proc = Process(target=self.get_frames, args=(video_path, queue))
+        proc = Thread(target=self.get_frames, args=(video_path, queue))
+        proc.start()
+        time.sleep(2)
+        batch_num = 0
+        data = {'embeddings' : [], 'image_paths': [],
+                'timestamps': [], 'sizes': []}
+#        if self.make_video:
+#            self.init_video_writer(base_name)
+        while True:
+            # detect faces and get respective frames
+            if self.debug: print('\nQueue', queue.qsize(), queue.empty())
+            try:
+                frames = queue.get(False)
+            except QueueEmpty:
+                if self.debug: print('Empty queue exception')
+                continue
+            if frames is None:
+                 if self.debug: print('Breaking out')
+                 break
+            if self.debug: print('Frames', len(frames), 'batch', batch_num)
+            rects, scores, indices = self.detect_faces(frames)
+            if self.debug: print('Detections', len(rects))
+            if len(rects) == 0:
+                continue
+            face_images = [frames[i] for i,_ in indices]
+            # adjust indices to reflect video's frame number
+            offset = batch_num * self.batch_size
+            indices = [(r + offset, c) for r,c in indices]
+            assert len(rects) == len(scores) == len(indices) == len(face_images),\
+                                    'Error in lengths of rects/scores/indices/images'
+            # get embeddings
+            embeddings = self.compute_embeddings(face_images, rects)
+            # save crops if needed
+            cropped_paths = []
+            if self.save_crops:
+                cropped_paths = self.save_cropped_faces(face_images, rects, indices, video_name)
+#            if self.make_video:
+#                self.init_video_writer(base_name)
+#                self.save_video(frames, indices, rects, scores)
+            # get detection timestamps and sizes and save
+            timestamps = [self.get_timestamp(int(video_name), int(f), self.fps) 
+                            for f,_ in indices]
+            sizes = [(right - left, bottom - top) for (left,top,right,bottom) in
+                     rects]
+            data['embeddings'].extend(list(embeddings))
+            data['image_paths'].extend(cropped_paths)
+            data['timestamps'].extend(timestamps)
+            data['sizes'].extend(sizes)
+            batch_num += 1
+        proc.join()
+        return data
         
     def run(self, video_files):
         '''
         Run pipeline for all videos in the list
         '''
+        tracemalloc.start()
+        file_exists = False
         for i,vid in enumerate(tqdm(video_files, desc='Processing video')):
-            mode = 'wb' if i == 0 else 'ab'
+            mode = 'wb' if not file_exists else 'ab'
             try:
-                self.run_video(vid, self.embeddings_path, mode=mode)
+                data = self.run_video(vid,)
+                self.serialize_data(self.embeddings_path, data,
+                                    mode=mode, debug=self.debug)
+                file_exists = True
             except EmptyVideoException:
                 print(f'No faces dected in {vid}')
+                continue
+            snapshot = tracemalloc.take_snapshot()
+            display_top(snapshot)
         print(f"Embeddings and auxillary data saved to {self.embeddings_path}")
     
+def display_top(snapshot, key_type='lineno', limit=3):
+    snapshot = snapshot.filter_traces((
+        tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
+        tracemalloc.Filter(False, "<unknown>"),
+    ))
+    top_stats = snapshot.statistics(key_type)
+
+    print("Top %s lines" % limit)
+    for index, stat in enumerate(top_stats[:limit], 1):
+        frame = stat.traceback[0]
+        # replace "/path/to/module/file.py" with "module/file.py"
+        filename = os.sep.join(frame.filename.split(os.sep)[-2:])
+        print("#%s: %s:%s: %.1f KiB"
+              % (index, filename, frame.lineno, stat.size / 1024))
+        line = linecache.getline(frame.filename, frame.lineno).strip()
+        if line:
+            print('    %s' % line)
+
+    other = top_stats[limit:]
+    if other:
+        size = sum(stat.size for stat in other)
+        print("%s other: %.1f KiB" % (len(other), size / 1024))
+    total = sum(stat.size for stat in top_stats)
+    print("Total allocated size: %.1f KiB" % (total / 1024))
     
 if __name__ == '__main__':
     # prepare directories
@@ -283,12 +368,12 @@ if __name__ == '__main__':
     graph_config = get_abs_path(__file__, GRAPH_CONFIG, depth=FILE_DEPTH)
     # create class and load face detector and recognizer
     faces = FaceEmbeddings(out_dir, embedding_filepath, CODEC, BATCH_SIZE,
-                           FACE_CONFIDENCE, skip_frames=EVERY_NTH_FRAME, 
+                           FACE_CONFIDENCE, skip_frames=EVERY_NTH_FRAME,
+                           window_dims=WINDOW_DIMS, fps=FPS,
                            save_crops=True, make_video=True)
     faces.load_detector(graph_config)
     faces.load_recognizer(RECOGNITION_MODEL_PATH, 
                           shape_predictor_path=SHAPE_PREDICTOR_PATH)
     # iterate over video-frames, detect faces and get embeddings
-#    faces.run_video(video_dir, embedding_filepath, mode='wb')
     video_files = get_file_list(video_dir, VIDEO_EXTENSIONS)
     faces.run(video_files)
