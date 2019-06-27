@@ -10,5 +10,5 @@
 # m h  dom mon dow   command
 
 # stream and save videos from 10 to 22:59
-0 10 * * * python3 /root/juul_video_stream/video_stream.py > /proc/1/fd/1 2> /proc/1/fd/2
+0 10 * * * python3 juul /root/juul_video_stream/video_stream.py > /proc/1/fd/1 2> /proc/1/fd/2
 #1-59/5 * * * * echo "Hello world $(date)" > /proc/1/fd/1 2> /proc/1/fd/2

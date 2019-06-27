@@ -13,6 +13,4 @@ RUN crontab crontab-jobs.txt
 
 RUN chmod 777 video_stream.py
 
-ENV stage docker
-
 CMD ["cron", "-f"]

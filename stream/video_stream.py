@@ -15,7 +15,7 @@ output dir:
 
 import cv2
 from datetime import datetime as dt
-import os,shutil, subprocess
+import os, shutil, subprocess, sys
 import time
 import importlib
 # custom
@@ -24,7 +24,10 @@ env = importlib.import_module('env', project_dir)
 
 
 # get stage to set global variables
-stage = os.environ.get('stage', 'test')
+try:
+    stage = sys.argv[1]
+except IndexError:
+    stage = 'test'
 assert stage in env.ENVIRON.keys(), \
         '{} not amount available options {}'.format(stage, env.ENVIRON.keys())
 # set global variables
