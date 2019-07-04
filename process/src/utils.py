@@ -5,6 +5,7 @@ Utility functions
 
 import os, shutil
 import cv2
+import pickle
 
 
 def create_dir(dir_path, empty_if_exists=True):
@@ -18,7 +19,6 @@ def create_dir(dir_path, empty_if_exists=True):
             os.makedirs(dir_path)
     else:
         os.makedirs(dir_path)
-        
         
 
 def get_abs_path(src, dest, depth=2):
@@ -49,17 +49,22 @@ def get_file_list(path, extensions):
         return [path]
     
     
-def draw_rectangles(image, rects, confidences):
+def draw_rectangles(image, rects, colors, texts=None, **kwargs):
     '''
     Draw one or multiple rectangles
     '''
+    text_configs = dict(fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.67, 
+                        color=(0,0,255), thickness=2)
+    text_configs.update(kwargs)
     for c,rect in enumerate(rects):
         p1 = tuple(rect[:2])
         p2 = tuple(rect[2:])
-        cv2.rectangle(image, p1, p2, (0,255,0), 2)
-        conf = confidences[c]
-        cv2.putText(image, f'Face {conf:.2f}', p1, cv2.FONT_HERSHEY_SIMPLEX,
-                    0.33, (0,0,255), 1)
+        cv2.rectangle(image, p1, p2, colors[c], 2)
+        if texts is not None:
+            text = texts[c]
+            if text != '':
+                cv2.putText(image, text, p1, **text_configs)
+    
     
 def detections2crops(detections, frame):
     '''
@@ -74,3 +79,21 @@ def detections2crops(detections, frame):
         cropped = frame[top:bottom, left:right]
         crops.append(cropped), rects.append((left,top,right,bottom))
     return crops, rects
+
+
+def load_pkl(filepath, print_keys=False):
+    with open(filepath, 'rb') as f:
+        data = pickle.load(f)
+    if print_keys:
+        for k,v in data.items():
+            print(f'Loaded {len(v)} of {k}')
+    return data
+
+
+def write_dict(filepath, data, print_keys=False):
+    with open(filepath, 'wb') as f:
+        pickle.dump(data, f)
+    if print_keys:
+        for k,v in data.items():
+            print(f'Wrote {len(v)} {k}')
+    return data

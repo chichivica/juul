@@ -9,7 +9,6 @@ import os, sys
 from tqdm import tqdm
 import pickle
 import time
-from memory_profiler import profile
 from threading import Thread
 from queue import Queue
 from queue import Empty as QueueEmpty
@@ -21,24 +20,24 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 project_dir = os.path.dirname(os.path.dirname(__file__))
 if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
-from src.utils import create_dir, get_abs_path, get_file_list, draw_rectangles
+from src.utils import create_dir, get_abs_path, get_file_list
 from src.mobilenet_ssd import get_detection_graph, graph_tensor_names,\
                                  graph_detections2crops
 
 
 FACE_CONFIDENCE = 0.69
-EVERY_NTH_FRAME = 3
+EVERY_NTH_FRAME = 1
 #VIDEO_PATH = 'data/raw/2019-06-21/'
-#VIDEO_PATH = 'data/external/juul_stream/1561469902.mp4'
-VIDEO_PATH = 'data/external/juul_stream/'
-DETECTED_FACES = 'data/interim/juul_stream/'
+VIDEO_PATH = 'data/external/juul_stream/1556725808.mp4'
+#VIDEO_PATH = 'data/external/juul_stream/'
+DETECTED_FACES = 'data/interim/demo/'
 TMP_DIR = 'data/tmp'
-WRITE_EMBEDDINGS = 'data/interim/embeddings/juul_2019-06-29.pkl'
+WRITE_EMBEDDINGS = 'data/interim/embeddings/demo_juul_2019-07-01.pkl'
 VIDEO_EXTENSIONS = ['mp4']
-FPS = 20.0
-WINDOW_DIMS = (2688,1520)
-#CROP = 
-CODEC = 'mp4v'
+CROP_FRAMES = {'top': 470, 'bottom': 1520-250,
+               'left': 400, 'right': 2688-300}
+BEGIN_FRAME = None
+MAX_FRAMES = None
 RECOGNITION_MODEL_PATH = '/home/neuro/dlib/dlib_face_recognition_resnet_model_v1.dat'
 SHAPE_PREDICTOR_PATH = '/home/neuro/dlib/shape_predictor_5_face_landmarks.dat'
 GRAPH_CONFIG = 'models/external/frozen_inference_graph_face.pb'
@@ -67,20 +66,19 @@ class FaceEmbeddings:
             get face embeddings
             save cropped faces and detection video if required
     '''
-    def __init__(self, output_dir, embeddings_path, codec, batch_size, tmp_dir,
-                 face_confidence, skip_frames=1, window_dims=(1280,720), fps=20.0,
-                 save_crops=True, make_video=False):
+    def __init__(self, output_dir, embeddings_path, batch_size, tmp_dir,
+                 face_confidence, crop_frames=None, skip_frames=1, stop_at_frame=None,
+                 start_at_frame=None, save_crops=True):
         self.skip_frames = skip_frames
-        self.codec = codec
         self.output_dir = output_dir
         self.batch_size = batch_size
         self.face_confidence = face_confidence
+        self.crop_frames = crop_frames
         self.save_crops = save_crops
-        self.make_video = make_video
         self.embeddings_path = embeddings_path
-        self.window_dims = window_dims
-        self.fps = fps
         self.tmp_dir = tmp_dir
+        self.stop_at_frame = stop_at_frame
+        self.start_at_frame = start_at_frame
         self.print_time = True
         self.debug = True
     
@@ -110,6 +108,7 @@ class FaceEmbeddings:
         '''
         assert os.path.exists(video_file), '{} does not exist'.format(video_file)
         cap = cv2.VideoCapture(video_file)
+        self.fps = cap.get(cv2.CAP_PROP_FPS)
         frame_num = 0
         while cap.isOpened():
             ret, frame = cap.read()
@@ -118,27 +117,27 @@ class FaceEmbeddings:
                 if self.debug:
                     print(f'Could not read {frame_num} frame from {video_file}')
                 break
+            # check if frame number within boundaries if provided
+            if self.start_at_frame is not None:
+                if frame_num < self.start_at_frame: 
+                    frame_num += 1
+                    continue
             # take every n-th frame
             if frame_num % self.skip_frames == 0:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame = frame[-1050:-300, -2220:-300, :]
+                if self.crop_frames:
+                    frame = frame[self.crop_frames['top']: self.crop_frames['bottom'],
+                                  self.crop_frames['left']: self.crop_frames['right'],
+                                  :]
                 queue.put(frame)
             frame_num += 1
-            if frame_num > 20000: break
+            # if over break out
+            if self.stop_at_frame is not None:
+                if frame_num > self.stop_at_frame: break
         queue.put(None)
         if frame_num == 0:
             raise EmptyVideoException
 
-    def init_video_writer(self, filename):
-        '''
-        Create a video writer object
-        '''
-        assert os.path.exists(self.output_dir), \
-                            '{} dir does not exist'.format(self.output_dir)
-        fourcc = cv2.VideoWriter_fourcc(*self.codec)
-        write_video = os.path.join(self.output_dir, filename)
-        self.writer = cv2.VideoWriter(write_video, fourcc, self.fps,
-                                      self.window_dims)
         
     def detect_faces(self, frames,):
         '''
@@ -158,9 +157,6 @@ class FaceEmbeddings:
                     graph_detections2crops(frames, batch_boxes, 
                                     batch_scores, batch_classes,
                                confidence_threshold=self.face_confidence)
-#                boxes, scores, indices = \
-#                        graph_detect_faces(self.detector, sess, frames, 
-#                                           self.face_confidence)
         duration = time.time() - start_time
         if self.print_time:
             print(f'{duration:.4f} seconds for {len(frames)} frames')
@@ -205,24 +201,6 @@ class FaceEmbeddings:
             filepaths.append(filepath)
         return filepaths
 
-    def save_video(self, frames, indices, rects, confidences):
-        '''
-        Create an output video with detections
-        '''
-        face_frames_inds = np.array(indices)[:,0]
-        rects = np.array(rects)
-        confidences = np.array(confidences)
-        for i, frame in enumerate(frames):
-            matches = np.argwhere(face_frames_inds == i)
-            if len(matches) > 0:
-                if matches.ndim == 2:
-                    matches = np.squeeze(matches, axis=1)
-                rect = rects[matches]
-                conf = confidences[matches]
-                draw_rectangles(frame, rect, conf)
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            self.writer.write(frame)
-        self.writer.release()
         
     @staticmethod        
     def get_timestamp(start, frame_num, fps):
@@ -264,10 +242,8 @@ class FaceEmbeddings:
         and save embeddings, timestamps, crops' paths and sizes
         '''
         batch_num = 0
-        data = {'embeddings' : [], 'image_paths': [],
-                'timestamps': [], 'sizes': []}
-        #        if self.make_video:
-#            self.init_video_writer(base_name)
+        data = {'embeddings' : [], 'image_paths': [], 'boxes': [],
+                'timestamps': [], 'scores': [], 'indices': []}
         while True:
             # if no items in queue just wait, None is a signal to break out
             try:
@@ -278,7 +254,7 @@ class FaceEmbeddings:
                 if self.debug: print('Breaking out of consumer')
                 break
             # detect faces and get respective frames
-            if self.debug: 
+            if self.debug:
                 print('Remaining in queue', queue.qsize(), 'batch number', batch_num)
             frames = self.serialize_data(path, data=None, mode='rb')
             rects, scores, indices = self.detect_faces(frames)
@@ -286,8 +262,9 @@ class FaceEmbeddings:
             if len(rects) > 0:
                 face_images = [frames[i] for i,_ in indices]
                 # adjust indices to reflect video's frame number
-                offset = batch_num * self.batch_size
-                indices = [(r + offset, c) for r,c in indices]
+                start_offset = 0 if self.start_at_frame is None else self.start_at_frame
+                offset = batch_num * self.batch_size * self.skip_frames + start_offset
+                indices = [(r * self.skip_frames + offset, c) for r,c in indices]
                 assert len(rects) == len(scores) == len(indices) == len(face_images),\
                                         'Error in lengths of rects/scores/indices/images'
                 # get embeddings
@@ -296,18 +273,15 @@ class FaceEmbeddings:
                 cropped_paths = []
                 if self.save_crops:
                     cropped_paths = self.save_cropped_faces(face_images, rects, indices, video_name)
-        #            if self.make_video:
-        #                self.init_video_writer(base_name)
-        #                self.save_video(frames, indices, rects, scores)
                 # get detection timestamps and sizes and save
                 timestamps = [self.get_timestamp(int(video_name), int(f), self.fps) 
                                 for f,_ in indices]
-                sizes = [(right - left, bottom - top) for (left,top,right,bottom) in
-                         rects]
                 data['embeddings'].extend(list(embeddings))
                 data['image_paths'].extend(cropped_paths)
                 data['timestamps'].extend(timestamps)
-                data['sizes'].extend(sizes)
+                data['scores'].extend(scores)
+                data['boxes'].extend(rects)
+                data['indices'].extend(indices)
             batch_num += 1
             os.remove(path)
         self.serialize_data(self.embeddings_path, data, 
@@ -400,13 +374,14 @@ if __name__ == '__main__':
     create_dir(os.path.dirname(embedding_filepath), False)
     graph_config = get_abs_path(__file__, GRAPH_CONFIG, depth=FILE_DEPTH)
     # create class and load face detector and recognizer
-    faces = FaceEmbeddings(out_dir, embedding_filepath, CODEC, BATCH_SIZE, tmp_dir,
+    faces = FaceEmbeddings(out_dir, embedding_filepath, BATCH_SIZE, tmp_dir,
                            FACE_CONFIDENCE, skip_frames=EVERY_NTH_FRAME,
-                           window_dims=WINDOW_DIMS, fps=FPS, 
-                           save_crops=True, make_video=True)
+                           crop_frames=CROP_FRAMES, start_at_frame=BEGIN_FRAME,
+                           save_crops=True, stop_at_frame=MAX_FRAMES)
     faces.load_detector(graph_config)
     faces.load_recognizer(RECOGNITION_MODEL_PATH, 
                           shape_predictor_path=SHAPE_PREDICTOR_PATH)
     # iterate over video-frames, detect faces and get embeddings
     video_files = get_file_list(video_dir, VIDEO_EXTENSIONS)
     faces.run(video_files)
+    
