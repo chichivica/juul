@@ -23,9 +23,9 @@ def get_detection_graph(path_to_graph):
 
 
 def graph_detections2crops(images, boxes, scores, classes, offset=0,
-                           confidence_threshold=0.7):
+                           confidence_threshold=0.7, min_spatial=50):
     '''
-    Convert predictions to crops
+    Convert graph predictions to lists of boxes, confidences and indices
     '''
     assert len(boxes) > 0, 'Boxes are empty'
     # get indices of high scores and face classes, inner join
@@ -44,6 +44,8 @@ def graph_detections2crops(images, boxes, scores, classes, offset=0,
         ymin, xmin, ymax, xmax = boxes[row, col]
         xmin,xmax = int(xmin * w), int(xmax * w)
         ymin,ymax = int(ymin * h), int(ymax * h)
+        if ymax - ymin < min_spatial or xmax - xmin < min_spatial:
+            continue
         rects.append((xmin,ymin,xmax,ymax))  # rectangels
         confs.append(scores[row,col]) # face probabilities
         indices.append((row + offset,col)) # tuples (frame number, detection  number)

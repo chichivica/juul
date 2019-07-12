@@ -66,19 +66,59 @@ def draw_rectangles(image, rects, colors, texts=None, **kwargs):
                 cv2.putText(image, text, p1, **text_configs)
     
     
-def detections2crops(detections, frame):
+#def mtcnn_detections2crops(batch_detections, confidence_threshold=0.95):
+#    '''
+#    Get a list of detections from MTCNN and return list of crops
+#    '''
+#    rects, confs, indices = [], [], []
+#    for f_n,image_detections in enumerate(batch_detections):
+#        for d_n,detected in enumerate(image_detections):
+#            if detected['confidence'] > confidence_threshold:
+#                left,top,w,h = detected['box']
+#                right = left + w
+#                bottom = top + h
+#                rects.append((left,top,right,bottom))
+#                confs.append(detected['confidence'])
+#                indices.append((f_n, d_n))
+#    return rects, confs, indices
+
+
+def mtcnn_detections2crops(batch_detections, batch_landmarks):
     '''
-    Get a list of detections from MTCNN and return list of crops
+    Get a list of detections from pytorch-mtcnn and 
+    return list of rectangles, confidences (now default) and indices
     '''
-    crops = []
-    rects = []
-    for detected in detections:
-        left,top,w,h = detected['box']
-        right = left + w
-        bottom = top + h
-        cropped = frame[top:bottom, left:right]
-        crops.append(cropped), rects.append((left,top,right,bottom))
-    return crops, rects
+    rects, landmarks, indices = [], [], []
+    for f_n,(image_detections,image_landmarks) in \
+                        enumerate(zip(batch_detections, batch_landmarks)):
+        for d_n in range(image_detections.size(0)):
+            left,top,right,bottom = image_detections[d_n].cpu().numpy()
+            left_eye,right_eye,nose,mouse_left,mouse_right = \
+                            image_landmarks[d_n].cpu().numpy()
+            rects.append((left,top,right,bottom))
+            landmarks.append((left_eye,right_eye,nose,mouse_left,mouse_right))
+            indices.append((f_n, d_n))
+    return rects, landmarks, indices
+
+
+def dlib_detections2crops(batch_detections, min_spatial=50):
+    '''
+    Get a list of detections from dlib cnn detector and 
+    return list of rectangles, confidences and indices
+    '''
+    rects, confs, indices = [], [], []
+    for f_n,image_detections in enumerate(batch_detections):
+        for d_n in range(len(image_detections)):
+            dlib_rect = image_detections[d_n].rect
+            if dlib_rect.height() > min_spatial and \
+                                dlib_rect.width() > min_spatial:
+                left = max(dlib_rect.left(), 0)
+                top = max(dlib_rect.top(), 0)
+                right,bottom = dlib_rect.right(),dlib_rect.bottom()
+                rects.append((left,top,right,bottom))
+                confs.append(image_detections[d_n].confidence)
+                indices.append((f_n, d_n))
+    return rects, confs, indices
 
 
 def load_pkl(filepath, print_keys=False):

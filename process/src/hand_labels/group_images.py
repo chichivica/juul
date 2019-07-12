@@ -15,9 +15,9 @@ if project_dir not in sys.path:
 from src.utils import create_dir, get_abs_path, load_pkl
 
 
-OUT_DIR = 'data/interim/clustered_images'
-CLUSTER_LABELS = 'data/interim/clusters/demo_juul_2019-07-01.npy'
-DATA_FILE = 'data/interim/embeddings/demo_juul_2019-07-01.pkl'
+OUT_DIR = 'data/interim/juul_long_clustered'
+CLUSTER_LABELS = 'data/interim/clusters/juul_long_mtcnn.npy'
+DATA_FILE = 'data/interim/embeddings/juul_long_mtcnn.pkl'
 
 if __name__ == '__main__':
     # prepare paths

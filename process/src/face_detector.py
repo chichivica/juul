@@ -9,40 +9,51 @@ import os, sys
 from tqdm import tqdm
 import pickle
 import time
+import torch.multiprocessing as mp
+from multiprocessing import Queue as mpQueue
 from threading import Thread
 from queue import Queue
 from queue import Empty as QueueEmpty
-#from mtcnn.mtcnn import MTCNN
+import mtcnn
 import dlib
+import torch
 import tensorflow as tf
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 # custom modules
 project_dir = os.path.dirname(os.path.dirname(__file__))
 if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
-from src.utils import create_dir, get_abs_path, get_file_list
+from src.utils import create_dir, get_abs_path, get_file_list, \
+                        mtcnn_detections2crops, dlib_detections2crops
 from src.mobilenet_ssd import get_detection_graph, graph_tensor_names,\
                                  graph_detections2crops
+from src import env
 
+try:
+    stage = sys.argv[1]
+except IndexError:
+    stage = 'test'
+assert stage in env.ENVIRON.keys(), f'{stage} is not in {env.ENVIRON.keys()}'
 
-FACE_CONFIDENCE = 0.69
-EVERY_NTH_FRAME = 1
-#VIDEO_PATH = 'data/raw/2019-06-21/'
-VIDEO_PATH = 'data/external/juul_stream/1556725808.mp4'
-#VIDEO_PATH = 'data/external/juul_stream/'
-DETECTED_FACES = 'data/interim/demo/'
-TMP_DIR = 'data/tmp'
-WRITE_EMBEDDINGS = 'data/interim/embeddings/demo_juul_2019-07-01.pkl'
-VIDEO_EXTENSIONS = ['mp4']
-CROP_FRAMES = {'top': 470, 'bottom': 1520-250,
-               'left': 400, 'right': 2688-300}
-BEGIN_FRAME = None
-MAX_FRAMES = None
-RECOGNITION_MODEL_PATH = '/home/neuro/dlib/dlib_face_recognition_resnet_model_v1.dat'
-SHAPE_PREDICTOR_PATH = '/home/neuro/dlib/shape_predictor_5_face_landmarks.dat'
-GRAPH_CONFIG = 'models/external/frozen_inference_graph_face.pb'
-BATCH_SIZE = 32
-FILE_DEPTH = 2
+configs = env.ENVIRON[stage]
+FACE_CONFIDENCE = configs['FACE_CONFIDENCE']
+EVERY_NTH_FRAME = configs['EVERY_NTH_FRAME']
+VIDEO_PATH = configs['VIDEO_PATH']
+DETECTED_FACES = configs['DETECTED_FACES'].format(detector=configs['DETECTOR'])
+TMP_DIR = configs['TMP_DIR']
+WRITE_EMBEDDINGS = configs['WRITE_EMBEDDINGS'].format(detector=configs['DETECTOR'])
+VIDEO_EXTENSIONS = configs['VIDEO_EXTENSIONS']
+CROP_FRAMES = configs['CROP_FRAMES']
+MIN_SPATIAL = configs['MIN_SPATIAL']
+RESIZE_FRAMES = configs['RESIZE_FRAMES']
+BEGIN_FRAME = configs['BEGIN_FRAME']
+MAX_FRAMES = configs['MAX_FRAMES']
+RECOGNITION_MODEL_PATH = configs['RECOGNITION_MODEL_PATH']
+SHAPE_PREDICTOR_PATH = configs['SHAPE_PREDICTOR_PATH']
+DETECTOR_WEIGHTS = configs['DETECTOR_WEIGHTS']
+BATCH_SIZE = configs['BATCH_SIZE']
+FILE_DEPTH = configs['FILE_DEPTH']
+DETECTOR = configs['DETECTOR']
 
 
 class EmptyVideoException(Exception):
@@ -64,16 +75,19 @@ class FaceEmbeddings:
             load frames
             detect faces
             get face embeddings
-            save cropped faces and detection video if required
+            save cropped faces if required
     '''
     def __init__(self, output_dir, embeddings_path, batch_size, tmp_dir,
-                 face_confidence, crop_frames=None, skip_frames=1, stop_at_frame=None,
-                 start_at_frame=None, save_crops=True):
+                 face_confidence, min_spatial, crop_frames=None, resize_frames=None,
+                 skip_frames=1, stop_at_frame=None, start_at_frame=None, 
+                 save_crops=True):
         self.skip_frames = skip_frames
         self.output_dir = output_dir
         self.batch_size = batch_size
         self.face_confidence = face_confidence
+        self.min_spatial = min_spatial
         self.crop_frames = crop_frames
+        self.resize_frames = resize_frames
         self.save_crops = save_crops
         self.embeddings_path = embeddings_path
         self.tmp_dir = tmp_dir
@@ -81,15 +95,30 @@ class FaceEmbeddings:
         self.start_at_frame = start_at_frame
         self.print_time = True
         self.debug = True
+        self.fps = 20
     
-    def load_detector(self, model_path):
+    
+    def load_detector(self, detector, model_path):
         '''
         Load Mobilenet SSD detector as tensorflow graph
         '''
         assert os.path.exists(model_path), '{} does not exist'.format(model_path)
-        self.detector = get_detection_graph(graph_config)
-        self.detector_tensor_names = graph_tensor_names(self.detector)
-        
+        assert detector in ['mtcnn', 'mobilenet_ssd','dlib'], \
+                            'Detector should be mtcnn, dlib or mobilenet_ssd'
+        if detector == 'mobilenet_ssd':
+            self.detector = get_detection_graph(model_path)
+            self.detector_tensor_names = graph_tensor_names(self.detector)
+        elif detector == 'mtcnn':
+            pnet, rnet, onet = mtcnn.get_net_caffe(model_path)
+            pnet.share_memory()
+            rnet.share_memory()
+            onet.share_memory()
+            self.detector = mtcnn.FaceDetector(pnet, rnet, onet, device='cuda:0')
+        else:
+            self.detector = dlib.cnn_face_detection_model_v1(model_path)
+        self.detector_ = detector
+    
+    
     def load_recognizer(self, model_path, shape_predictor_path=None):
         '''
         Load Dlib's face recognition and shape predictor models
@@ -100,6 +129,7 @@ class FaceEmbeddings:
             assert os.path.exists(model_path), \
                             '{} does not exist'.format(shape_predictor_path)
             self.shape_predictor = dlib.shape_predictor(shape_predictor_path)
+
 
     def get_frames(self, video_file, queue):
         '''
@@ -124,11 +154,16 @@ class FaceEmbeddings:
                     continue
             # take every n-th frame
             if frame_num % self.skip_frames == 0:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                if self.detector_ != 'mtcnn':  # pytorch-mtcnn uses bgr
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 if self.crop_frames:
                     frame = frame[self.crop_frames['top']: self.crop_frames['bottom'],
                                   self.crop_frames['left']: self.crop_frames['right'],
                                   :]
+                if self.resize_frames:
+                    h,w = frame.shape[:2]
+                    resize_to = (int(w * self.resize_frames), int(h * self.resize_frames))
+                    frame = cv2.resize(frame, resize_to, cv2.INTER_AREA)
                 queue.put(frame)
             frame_num += 1
             # if over break out
@@ -147,20 +182,37 @@ class FaceEmbeddings:
         frames = np.array(frames)
         # process frames
         start_time = time.time()
-        (batch_boxes, batch_scores, batch_classes) = \
-            self.sess.run([self.detector_tensor_names['box_tensor'], 
-                      self.detector_tensor_names['score_tensor'], 
-                      self.detector_tensor_names['class_tensor']
-                      ], feed_dict={
-                    self.detector_tensor_names['image_tensor']: frames})
-        boxes, scores, indices = \
-                    graph_detections2crops(frames, batch_boxes, 
-                                    batch_scores, batch_classes,
-                               confidence_threshold=self.face_confidence)
+        if self.detector_ == 'mobilenet_ssd':
+            (batch_boxes, batch_scores, batch_classes) = \
+                self.sess.run([self.detector_tensor_names['box_tensor'], 
+                          self.detector_tensor_names['score_tensor'], 
+                          self.detector_tensor_names['class_tensor']
+                          ], feed_dict={
+                        self.detector_tensor_names['image_tensor']: frames})
+            boxes, scores, indices = \
+                        graph_detections2crops(frames, batch_boxes, 
+                                        batch_scores, batch_classes,
+                                   confidence_threshold=self.face_confidence,
+                                   min_spatial=self.min_spatial)
+            landmarks = None
+        elif self.detector_ == 'mtcnn':
+            detect_fn = lambda x: self.detector.detect(x, 
+                                    threshold=[0.6,0.7,self.face_confidence], 
+                                    minsize=self.min_spatial)
+            detections = np.array(list(map(detect_fn, frames)))
+            boxes, landmarks, indices = \
+                        mtcnn_detections2crops(detections[:,0], detections[:,1])
+            scores = [self.face_confidence] * len(boxes)
+        else:
+            detect_fn = lambda x: self.detector(x)
+            detections = list(map(detect_fn, frames))
+            boxes, scores, indices = dlib_detections2crops(detections)
+            landmarks = None
         duration = time.time() - start_time
         if self.print_time:
             print(f'{duration:.4f} seconds for {len(frames)} frames')
-        return boxes, scores, indices
+        return boxes, scores, indices, landmarks
+
 
     def compute_embeddings(self, images, rectangle_points,):
         '''
@@ -184,6 +236,7 @@ class FaceEmbeddings:
             print(f'{duration:.4f} sec for {len(embeddings)} embeddings')
         return np.array(embeddings)
     
+    
     def save_cropped_faces(self, images, rects, indices, video_name):
         '''
         Save cropped faces if needed
@@ -196,7 +249,7 @@ class FaceEmbeddings:
             filepath = os.path.join(self.output_dir, filename + '.jpg')
             left,top,right,bottom = rects[i]
             crop = cv2.cvtColor(images[i][top:bottom, left:right], 
-                                cv2.COLOR_RGB2BGR)
+                                    cv2.COLOR_RGB2BGR)
             cv2.imwrite(filepath, crop)
             filepaths.append(filepath)
         return filepaths
@@ -236,14 +289,18 @@ class FaceEmbeddings:
                 pickle.dump(data, f)
                 if debug: print('Dumped', len(data[list(data.keys())[0]]), mode)
     
+    
     def process_batches(self, queue, video_name, mode):
         '''
         Detect faces and compute embeddings on each batch of frames
         and save embeddings, timestamps, crops' paths and sizes
         '''
+        self.load_recognizer(RECOGNITION_MODEL_PATH, 
+                              shape_predictor_path=SHAPE_PREDICTOR_PATH)
         batch_num = 0
         data = {'embeddings' : [], 'image_paths': [], 'boxes': [],
-                'timestamps': [], 'scores': [], 'indices': []}
+                'timestamps': [], 'scores': [], 'indices': [],
+                'landmarks': []}
         while True:
             # if no items in queue just wait, None is a signal to break out
             try:
@@ -257,10 +314,15 @@ class FaceEmbeddings:
             if self.debug:
                 print('Remaining in queue', queue.qsize(), 'batch number', batch_num)
             frames = self.serialize_data(path, data=None, mode='rb')
-            rects, scores, indices = self.detect_faces(frames)
+            rects, scores, indices, landmarks = self.detect_faces(frames)
             if self.debug: print('Detections', len(rects))
             if len(rects) > 0:
-                face_images = [frames[i] for i,_ in indices]
+                # get only frames of interest, convert to rgb if pytorch-mtcnn
+                if self.detector_ == 'mtcnn':
+                    face_images = [cv2.cvtColor(frames[i], cv2.COLOR_BGR2RGB) \
+                                   for i,_ in indices]
+                else:
+                    face_images = [frames[i] for i,_ in indices]
                 # adjust indices to reflect video's frame number
                 start_offset = 0 if self.start_at_frame is None else self.start_at_frame
                 offset = batch_num * self.batch_size * self.skip_frames + start_offset
@@ -282,10 +344,12 @@ class FaceEmbeddings:
                 data['scores'].extend(scores)
                 data['boxes'].extend(rects)
                 data['indices'].extend(indices)
+                data['landmarks'].extend(landmarks)
             batch_num += 1
             os.remove(path)
         self.serialize_data(self.embeddings_path, data, 
                             mode=mode, debug=self.debug)
+    
     
     def frames2batch(self, in_q, out_q,):
         '''
@@ -299,6 +363,7 @@ class FaceEmbeddings:
             try:
                 frame = in_q.get(False)
             except QueueEmpty:
+#                print('Empty queue')
                 continue
             # None is a signal to break out
             if frame is None:
@@ -319,47 +384,64 @@ class FaceEmbeddings:
                     batch = []
         out_q.put(None)
     
+    
     def run_video(self, video_path, mode):
         '''
         Run 1 video pipeline
         '''
         base_name = os.path.basename(video_path)
         video_name = base_name.split('.')[0]
-        assert self.detector and self.recognizer, 'Load models first'
-        # define producer queue and process
+        assert self.detector, 'Load models first'
+        # define producer/consumer queues and processes
         frames_queue = Queue()
         producer = Thread(target=self.get_frames, args=(video_path, frames_queue))
-        producer.setDaemon(True)
+        if self.detector_ == 'mtcnn':
+            batches_queue = mpQueue()
+            consumer = mp.Process(target=self.process_batches, 
+                                  args=(batches_queue, video_name, mode))
+        else:
+            batches_queue = Queue()
+            consumer = Thread(target=self.process_batches, 
+                              args=(batches_queue, video_name, mode))
+        # launch process
+        producer.daemon = True
         producer.start()
-        # define consumner queue and process
-        batches_queue = Queue()
-        consumer = Thread(target=self.process_batches, 
-                          args=(batches_queue, video_name, mode))
-        consumer.setDaemon(True)
+        consumer.daemon = True
         consumer.start()
         # run main process
         self.frames2batch(frames_queue, batches_queue)
         # wait to finish
         producer.join()
         consumer.join()
+
     
     def run(self, video_files):
         '''
         Run pipeline for all videos in the list
         '''
         file_exists = False
-        with self.detector.as_default():
-            config = tf.compat.v1.ConfigProto()
-            config.gpu_options.allow_growth = True
-            with tf.compat.v1.Session(graph=self.detector, config=config) as self.sess:
-                for i,vid in enumerate(tqdm(video_files, desc='Processing video')):
-                    mode = 'wb' if not file_exists else 'ab'
-                    try:
-                        self.run_video(vid, mode)
-                        file_exists = True
-                    except EmptyVideoException:
-                        print(f'No faces detected in {vid}')
-                        continue
+        if self.detector_ == 'mobilenet_ssd':
+            with self.detector.as_default():
+                config = tf.compat.v1.ConfigProto()
+                config.gpu_options.allow_growth = True
+                with tf.compat.v1.Session(graph=self.detector, config=config) as self.sess:
+                    for i,vid in enumerate(tqdm(video_files, desc='Processing video')):
+                        mode = 'wb' if not file_exists else 'ab'
+                        try:
+                            self.run_video(vid, mode)
+                            file_exists = True
+                        except EmptyVideoException:
+                            print(f'No faces detected in {vid}')
+                            continue
+        else:
+            for i,vid in enumerate(tqdm(video_files, desc='Processing video')):
+                mode = 'wb' if not file_exists else 'ab'
+                try:
+                    self.run_video(vid, mode)
+                    file_exists = True
+                except EmptyVideoException:
+                    print(f'No faces detected in {vid}')
+                    continue
         print(f"Embeddings and auxillary data saved to {self.embeddings_path}")
     
     
@@ -372,16 +454,22 @@ if __name__ == '__main__':
     create_dir(tmp_dir, True)
     embedding_filepath = get_abs_path(__file__, WRITE_EMBEDDINGS, depth=FILE_DEPTH)
     create_dir(os.path.dirname(embedding_filepath), False)
-    graph_config = get_abs_path(__file__, GRAPH_CONFIG, depth=FILE_DEPTH)
+    detector_weights = {k:get_abs_path(__file__, f, depth=FILE_DEPTH) for \
+                                k,f in DETECTOR_WEIGHTS.items()}
     # create class and load face detector and recognizer
+    torch.manual_seed(100)
+    mp.set_start_method('spawn', force=True)
     faces = FaceEmbeddings(out_dir, embedding_filepath, BATCH_SIZE, tmp_dir,
-                           FACE_CONFIDENCE, skip_frames=EVERY_NTH_FRAME,
-                           crop_frames=CROP_FRAMES, start_at_frame=BEGIN_FRAME,
-                           save_crops=True, stop_at_frame=MAX_FRAMES)
-    faces.load_detector(graph_config)
-    faces.load_recognizer(RECOGNITION_MODEL_PATH, 
-                          shape_predictor_path=SHAPE_PREDICTOR_PATH)
+                           FACE_CONFIDENCE, min_spatial=MIN_SPATIAL,
+                           skip_frames=EVERY_NTH_FRAME,
+                           crop_frames=CROP_FRAMES, resize_frames=RESIZE_FRAMES,
+                           start_at_frame=BEGIN_FRAME, stop_at_frame=MAX_FRAMES,
+                           save_crops=True)
+    faces.load_detector(DETECTOR, detector_weights[DETECTOR])
     # iterate over video-frames, detect faces and get embeddings
     video_files = get_file_list(video_dir, VIDEO_EXTENSIONS)
     faces.run(video_files)
     
+#TODO
+    #set fps values from a video
+    #semaphor tracker

@@ -15,29 +15,43 @@ Algorithm:
 
 from scipy.cluster import hierarchy
 import sys, os
-#import dlib
+import dlib
+import cv2
 import numpy as np
 import pandas as pd
+from sklearn.metrics import silhouette_score, silhouette_samples
 # custom modules
 project_dir = os.path.dirname(os.path.dirname(__file__))
 if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
 from src.utils import create_dir, get_abs_path, load_pkl
+from src import env
 
+if __name__ == '__main__':
+    try:
+        stage = sys.argv[1]
+    except IndexError:
+        stage = 'test'
+    assert stage in env.ENVIRON.keys(), f'{stage} is not in {env.ENVIRON.keys()}'
+    configs = env.ENVIRON[stage]    
+    INPUT_FILE = configs['WRITE_EMBEDDINGS'].format(detector=configs['DETECTOR'])
+    WRITE_CLUSTERS = configs['WRITE_CLUSTERS'].format(detector=configs['DETECTOR'])
+    WRITE_SEEN_TIMES = configs['WRITE_SEEN_TIMES'].format(detector=configs['DETECTOR'])
 
-INPUT_FILE = 'data/interim/embeddings/demo_juul_2019-07-01.pkl'
-WRITE_CLUSTERS = 'data/interim/clusters/demo_juul_2019-07-01.npy'
-WRITE_SEEN_TIMES = 'data/interim/clusters/demo_juul_2019-07-01_times.csv'
-THRESHOLD = 0.5
-MIN_CLUSTER_SIZE = 2
-MIN_SPATIAL = 50
+CLUSTERING_THRESHOLD = 0.45
+SILHOUETTE_THRESHOLD = 0.15
+MIN_CLUSTER_SIZE = 3
+MIN_WIDTH = 55
+MIN_HEIGHT = 65
 TIME_CHUNKS = 10
-EMPLOYEE_CHUNKS = 7
-MIN_SECONDS = 5
-DISCARD_SMALL_CLUSTERS = False
-DISCARD_EMPLOYEES = False
-DISCARD_SHORT_TIMERS = False
-
+EMPLOYEE_CHUNKS = TIME_CHUNKS // 2 + 1
+MIN_SECONDS = 10
+DISCARD_SMALL_CLUSTERS = True
+DISCARD_EMPLOYEES = True
+DISCARD_SHORT_TIMERS = True
+DISCARD_LOW_SILHOUETTE = True
+MIN_BLUR_VAR = 80
+MAX_BLUR_VAR = 400
 
 
 def hierarchical_clustering(features, threshold, dist_type='euclidean',
@@ -111,9 +125,8 @@ def make_splits(timestamps, num_splits):
     for i in range(1, num_splits):
         splits[timestamps > upper_bound] = i
         upper_bound += seconds
-    print(f'{num_splits} time chunks of len {seconds:.1f} '
+    print(f'{num_splits} time chunks of len {seconds:.1f}s '
           f'from {min_time} to {max_time}')
-    print(f'{len(np.unique(splits))} unique splits')
     return splits
 
 
@@ -165,6 +178,99 @@ def short_time_labels(clusters, durations, min_duration):
     return short_labs
 
 
+def face_frontal(face_landmarks):
+    '''
+    Determine if face is frontal by looking at a nose position
+    Considering landmarks as x,y in order: left eye, right eye,
+    nose, left mouth edge, right mouth edge
+    '''
+    l_eye,r_eye,nose,l_mouth,r_mouth = face_landmarks 
+    left_edge = max(l_eye[0], l_mouth[0])
+    top_edge = max(l_eye[1], r_eye[1])
+    right_edge = min(r_eye[0], r_mouth[0])
+    bottom_edge = min(l_mouth[1], r_mouth[1])
+    if (left_edge < nose[0] < right_edge) and \
+        (top_edge < nose[1] < bottom_edge):
+        return True
+    else:
+        return False
+
+def select_frontal_faces(landmarks_list):
+    '''
+    Mark if face is frontal or not for a list of face landmarks
+    '''
+    frontal_fn = lambda x: face_frontal(x)
+    is_frontal = np.array(list(map(frontal_fn, landmarks)))
+    print(f'{is_frontal.sum()} out of {len(is_frontal)} are frontal')
+    return np.argwhere(is_frontal).squeeze(1)
+
+
+def calc_bluriness(image_path):
+    '''
+    Calculate blurriness variance for a gray image
+    '''
+    path = os.path.join(project_dir, image_path)
+    bgr = cv2.imread(path)
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    return cv2.Laplacian(gray, cv2.CV_64F).var()
+
+
+def select_blur_normal(image_paths, min_blur, max_blur):
+    '''
+    Select indices of images that have normal blur-variance value
+    '''
+    blur_fn = lambda f: calc_bluriness(f)
+    blur_index = np.array(list(map(blur_fn, image_paths)))
+    is_normal = np.argwhere((blur_index > min_blur) & 
+                            (blur_index < max_blur)).squeeze(1)
+    print(f'{len(is_normal)} out of {len(image_paths)} have normal blur variance '
+          f'between {min_blur} and {max_blur}')
+    return is_normal
+
+
+def dlib_chinese_whispers(array_of_features, threshold):
+    '''
+    Convert to dlib vectors and perform chinese whispering clustering
+    '''
+    emb_dlib = [dlib.vector(e) for e in array_of_features]
+    cw_labels = dlib.chinese_whispers_clustering(emb_dlib, threshold)
+    return np.array(cw_labels)
+
+
+def cluster_results(features, labels):
+    '''
+    Results of clustering
+    '''
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    n_noize = (labels == -1).sum()
+    score = silhouette_score(features, labels)
+    print(f'Number of clusters: {n_clusters}')
+    print(f'Number of noizy points: {n_noize/len(labels):.3f}')
+    print(f'Silhouette score: {score}')
+    
+    
+def select_high_silhouette(embeddings, labels, silh_threshold):
+    '''
+    Get cluster labels with high silhouette score
+    and select their indices from labels array
+    '''
+    silh_scores = silhouette_samples(embeddings, labels)
+    silh_df = pd.DataFrame({
+                'score': silh_scores,
+                'cluster': labels,
+                })
+    cluster_scores = silh_df.groupby('cluster').agg({'score': ['mean','count']})
+    high_silh_clusters = \
+        cluster_scores.loc[cluster_scores[('score', 'mean')] > silh_threshold]\
+                        .index.values
+    isin_fn = lambda x: x in high_silh_clusters
+    is_target = np.array(list(map(isin_fn, labels)))
+    print(f'{len(high_silh_clusters)} clusters have silhouette score above {silh_threshold} '
+          f'corresponding to {is_target.sum()} out of {len(is_target)} values')
+    return is_target
+
+
 if __name__ == '__main__':
     # prepare folders
     file = get_abs_path(__file__, INPUT_FILE, depth=2)
@@ -174,37 +280,52 @@ if __name__ == '__main__':
     # get input data
     data = load_pkl(file, True)
     sizes = calc_sizes(data['boxes'])
-    large_indices = filter_small_faces(sizes, MIN_SPATIAL, MIN_SPATIAL)
-    clustering_data = np.array(data['embeddings'])[large_indices]
+    target_indices = filter_small_faces(sizes, MIN_WIDTH, MIN_HEIGHT)
+    # remove non-frontal images
+    landmarks = np.array(data['landmarks'])[target_indices]
+    frontal_indices = select_frontal_faces(landmarks)
+    target_indices = target_indices[frontal_indices]
+    nonfrontal_indices = target_indices[np.setdiff1d(np.arange(len(target_indices)),frontal_indices)]
+    # remove too low and too high blur variance images
+    image_paths = np.array(data['image_paths'])[target_indices]
+    normal_indices = select_blur_normal(image_paths, MIN_BLUR_VAR, MAX_BLUR_VAR)
+    target_indices = target_indices[normal_indices]
+    abnormal_blur_indices = target_indices[np.setdiff1d(np.arange(len(target_indices)),frontal_indices)]
     # cluster embeddings
-    h_clusters = hierarchical_clustering(clustering_data, THRESHOLD)
-#    dlib_vectors = [dlib.vector(e) for e in data['embeddings']]
-#    cw_clusters = dlib.chinese_whispers_clustering(dlib_vectors, 0.4)
+    embeddings = np.array(data['embeddings'])[target_indices]
+    clusters = dlib_chinese_whispers(embeddings, CLUSTERING_THRESHOLD)
+    cluster_results(embeddings, clusters)
+    # select clusters with high silhouette score
+    if DISCARD_LOW_SILHOUETTE:
+        is_target = select_high_silhouette(embeddings, clusters, SILHOUETTE_THRESHOLD)
+        target_indices = target_indices[is_target]
+        clusters = clusters[is_target]
     # get times of first and last seen, frequencies
-    h_timestamps = np.array(data['timestamps'])[large_indices]
-    h_splits = make_splits(h_timestamps, TIME_CHUNKS)
-    seen_times = first_last_seen(h_clusters, h_timestamps, h_splits,
+    timestamps = np.array(data['timestamps'])[target_indices]
+    splits = make_splits(timestamps, TIME_CHUNKS)
+    seen_times = first_last_seen(clusters, timestamps, splits,
                                  cond='cluster >= 0')
     if DISCARD_SMALL_CLUSTERS:
         # correct small clusters
-        small_clusters = small_cluster_labels(h_clusters, MIN_CLUSTER_SIZE)
-        h_clusters = replace_cluster_labels(h_clusters, small_clusters, -4)
+        small_clusters = small_cluster_labels(clusters, MIN_CLUSTER_SIZE)
+        clusters = replace_cluster_labels(clusters, small_clusters, -4)
     if DISCARD_EMPLOYEES:
         # correct employees
         employee_clusters = employee_cluster_labels(seen_times['cluster'].values,
                                                     seen_times['split_nunique'].values,
                                                     EMPLOYEE_CHUNKS)
-        h_clusters = replace_cluster_labels(h_clusters, employee_clusters, -2)
-        seen_times = seen_times[~seen_times['cluster'].isin(employee_clusters)]
+        clusters = replace_cluster_labels(clusters, employee_clusters, -2)
     if DISCARD_SHORT_TIMERS:
         # correct close but fast
         short_timers = short_time_labels(seen_times['cluster'].values, 
                                          seen_times['duration_sec'], MIN_SECONDS)
-        h_clusters = replace_cluster_labels(h_clusters, short_timers, -3)
+        clusters = replace_cluster_labels(clusters, short_timers, -3)
     # create final labels, save clusters and time of visits
-    clusters = np.zeros(len(sizes)) - 1
-    clusters[large_indices] = h_clusters
-    np.save(out, clusters)
+    final_clusters = np.zeros(len(sizes)) - 1
+    final_clusters[target_indices] = clusters
+    final_clusters[abnormal_blur_indices] = -5
+    final_clusters[nonfrontal_indices] = -6
+    np.save(out, final_clusters)
     seen_times.to_csv(out_times, index=False)
     print(f'{len(set(clusters))} cluster labels saved to {out}')
     print(f'{len(seen_times)} cluster seen times saved to {out_times}')
