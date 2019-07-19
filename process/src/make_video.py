@@ -31,12 +31,17 @@ assert stage in env.ENVIRON.keys(), f'{stage} is not in {env.ENVIRON.keys()}'
 configs = env.ENVIRON[stage]
 INPUT_VIDEO = configs['VIDEO_PATH']
 assert os.path.isfile(INPUT_VIDEO), f'Video input {INPUT_VIDEO} is not a file'
-OUTPUT_FILE = os.path.join(configs['DETECTED_FACES'].format(detector=configs['DETECTOR']),
+OUTPUT_FILE = os.path.join(configs['DETECTED_FACES'].format(detector=configs['DETECTOR'],
+                                                           name=configs['NAME']),
                            os.path.basename(INPUT_VIDEO))
-DATA_FILE = configs['WRITE_EMBEDDINGS'].format(detector=configs['DETECTOR'])
-CLUSTER_LABELS = configs['WRITE_CLUSTERS'].format(detector=configs['DETECTOR'])
-CLUSTER_TIMES = configs['WRITE_SEEN_TIMES'].format(detector=configs['DETECTOR'])
-CLUSTER_DEMOGRAPHICS = configs['WRITE_DEMOGRAPHICS'].format(detector=configs['DETECTOR'])
+DATA_FILE = configs['WRITE_EMBEDDINGS'].format(detector=configs['DETECTOR'],
+                                               name=configs['NAME'])
+CLUSTER_LABELS = configs['WRITE_CLUSTERS'].format(detector=configs['DETECTOR'],
+                                                    name=configs['NAME'])
+CLUSTER_TIMES = configs['WRITE_SEEN_TIMES'].format(detector=configs['DETECTOR'],
+                                                       name=configs['NAME'])
+CLUSTER_DEMOGRAPHICS = configs['WRITE_DEMOGRAPHICS'].format(detector=configs['DETECTOR'],
+                                                              name=configs['NAME'])
 START_FRAME = 0
 END_FRAME = None
 START_X = configs['CROP_FRAMES']['left']

@@ -7,7 +7,6 @@ import cv2
 import numpy as np
 import os, sys
 from tqdm import tqdm
-import pickle
 import time
 import torch.multiprocessing as mp
 from multiprocessing import Queue as mpQueue
@@ -25,35 +24,39 @@ if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
 from src.utils import create_dir, get_abs_path, get_file_list, \
                         mtcnn_detections2crops, dlib_detections2crops
+from src.utils import create_hdf, append_to_hdf, load_hdf, get_cmd_argv
 from src.mobilenet_ssd import get_detection_graph, graph_tensor_names,\
                                  graph_detections2crops
 from src import env
 
-try:
-    stage = sys.argv[1]
-except IndexError:
-    stage = 'test'
-assert stage in env.ENVIRON.keys(), f'{stage} is not in {env.ENVIRON.keys()}'
 
-configs = env.ENVIRON[stage]
-FACE_CONFIDENCE = configs['FACE_CONFIDENCE']
-EVERY_NTH_FRAME = configs['EVERY_NTH_FRAME']
-VIDEO_PATH = configs['VIDEO_PATH']
-DETECTED_FACES = configs['DETECTED_FACES'].format(detector=configs['DETECTOR'])
-TMP_DIR = configs['TMP_DIR']
-WRITE_EMBEDDINGS = configs['WRITE_EMBEDDINGS'].format(detector=configs['DETECTOR'])
-VIDEO_EXTENSIONS = configs['VIDEO_EXTENSIONS']
-CROP_FRAMES = configs['CROP_FRAMES']
-MIN_SPATIAL = configs['MIN_SPATIAL']
-RESIZE_FRAMES = configs['RESIZE_FRAMES']
-BEGIN_FRAME = configs['BEGIN_FRAME']
-MAX_FRAMES = configs['MAX_FRAMES']
-RECOGNITION_MODEL_PATH = configs['RECOGNITION_MODEL_PATH']
-SHAPE_PREDICTOR_PATH = configs['SHAPE_PREDICTOR_PATH']
-DETECTOR_WEIGHTS = configs['DETECTOR_WEIGHTS']
-BATCH_SIZE = configs['BATCH_SIZE']
-FILE_DEPTH = configs['FILE_DEPTH']
-DETECTOR = configs['DETECTOR']
+if __name__ == '__main__':
+    stage = get_cmd_argv(sys.argv, 1, default='test')
+    configs = env.ENVIRON[stage]
+    FACE_CONFIDENCE = configs['FACE_CONFIDENCE']
+    EVERY_NTH_FRAME = configs['EVERY_NTH_FRAME']
+    q_date = get_cmd_argv(sys.argv, 2, default=None)
+    if q_date is None:
+        VIDEO_PATH = configs['VIDEO_PATH']
+    else:
+        VIDEO_PATH = configs['VIDEO_PATH'].format(date = q_date)
+    DETECTED_FACES = configs['DETECTED_FACES'].format(detector=configs['DETECTOR'],
+                                                      name=configs['NAME'])
+    TMP_DIR = configs['TMP_DIR']
+    WRITE_DETECTIONS = configs['WRITE_DETECTIONS'].format(detector=configs['DETECTOR'],
+                                                          name=configs['NAME'])
+    VIDEO_EXTENSIONS = configs['VIDEO_EXTENSIONS']
+    CROP_FRAMES = configs['CROP_FRAMES']
+    MIN_SPATIAL = configs['MIN_SPATIAL']
+    RESIZE_FRAMES = configs['RESIZE_FRAMES']
+    BEGIN_FRAME = configs['BEGIN_FRAME']
+    MAX_FRAMES = configs['MAX_FRAMES']
+    RECOGNITION_MODEL_PATH = configs['RECOGNITION_MODEL_PATH'][configs['RECOGNITION']]
+    SHAPE_PREDICTOR_PATH = configs['SHAPE_PREDICTOR_PATH']
+    DETECTOR_WEIGHTS = configs['DETECTOR_WEIGHTS']
+    BATCH_SIZE = configs['BATCH_SIZE']
+    FILE_DEPTH = configs['FILE_DEPTH']
+    DETECTOR = configs['DETECTOR']
 
 
 class EmptyVideoException(Exception):
@@ -94,7 +97,7 @@ class FaceEmbeddings:
         self.stop_at_frame = stop_at_frame
         self.start_at_frame = start_at_frame
         self.print_time = True
-        self.debug = True
+        self.debug = False
         self.fps = 20
     
     
@@ -130,7 +133,7 @@ class FaceEmbeddings:
                             '{} does not exist'.format(shape_predictor_path)
             self.shape_predictor = dlib.shape_predictor(shape_predictor_path)
 
-
+    
     def get_frames(self, video_file, queue):
         '''
         Read frames from a video file and return a list of frames
@@ -267,27 +270,18 @@ class FaceEmbeddings:
         
         
     @staticmethod
-    def serialize_data(filepath, data, mode, debug=False):
+    def serialize_data(filepath, data, mode, chunks=True, debug=False):
         '''
         Saves embeddings with timestamps and related cropped face
         '''
-        assert mode in ['wb','ab', 'rb'], 'Mode to pickler either ab,rb or wb'
-        if mode == 'rb':
-            with open(filepath, 'rb') as f:
-                pkl_file = pickle.load(f)
-            return pkl_file
-        elif mode == 'ab':
-            with open(filepath, 'rb') as f:
-                pkl_file = pickle.load(f)
-            for k,v in data.items():
-                pkl_file[k].extend(v)
-            with open(filepath, 'wb') as f:
-                pickle.dump(pkl_file, f)
-                if debug: print('Dumped', len(pkl_file[k]), mode)
+        allowed = ['w','a','r']
+        assert mode in allowed, f'Mode should be either of {allowed}'
+        if mode == 'r':
+            return load_hdf(filepath, print_results=debug)
+        elif mode == 'a':
+            append_to_hdf(filepath, data, print_results=debug)
         else:
-            with open(filepath, mode) as f:
-                pickle.dump(data, f)
-                if debug: print('Dumped', len(data[list(data.keys())[0]]), mode)
+            create_hdf(filepath, data, chunks=chunks, print_results=debug)
     
     
     def process_batches(self, queue, video_name, mode):
@@ -295,8 +289,8 @@ class FaceEmbeddings:
         Detect faces and compute embeddings on each batch of frames
         and save embeddings, timestamps, crops' paths and sizes
         '''
-        self.load_recognizer(RECOGNITION_MODEL_PATH, 
-                              shape_predictor_path=SHAPE_PREDICTOR_PATH)
+    #        self.load_recognizer(RECOGNITION_MODEL_PATH, 
+    #                              shape_predictor_path=SHAPE_PREDICTOR_PATH)
         batch_num = 0
         data = {'embeddings' : [], 'image_paths': [], 'boxes': [],
                 'timestamps': [], 'scores': [], 'indices': [],
@@ -313,7 +307,7 @@ class FaceEmbeddings:
             # detect faces and get respective frames
             if self.debug:
                 print('Remaining in queue', queue.qsize(), 'batch number', batch_num)
-            frames = self.serialize_data(path, data=None, mode='rb')
+            frames = self.serialize_data(path, data=None, mode='r')['batch']
             rects, scores, indices, landmarks = self.detect_faces(frames)
             if self.debug: print('Detections', len(rects))
             if len(rects) > 0:
@@ -330,7 +324,7 @@ class FaceEmbeddings:
                 assert len(rects) == len(scores) == len(indices) == len(face_images),\
                                         'Error in lengths of rects/scores/indices/images'
                 # get embeddings
-                embeddings = self.compute_embeddings(face_images, rects)
+#                embeddings = self.compute_embeddings(face_images, rects)
                 # save crops if needed
                 cropped_paths = []
                 if self.save_crops:
@@ -338,7 +332,7 @@ class FaceEmbeddings:
                 # get detection timestamps and sizes and save
                 timestamps = [self.get_timestamp(int(video_name), int(f), self.fps) 
                                 for f,_ in indices]
-                data['embeddings'].extend(list(embeddings))
+#                data['embeddings'].extend(embeddings)
                 data['image_paths'].extend(cropped_paths)
                 data['timestamps'].extend(timestamps)
                 data['scores'].extend(scores)
@@ -347,8 +341,12 @@ class FaceEmbeddings:
                 data['landmarks'].extend(landmarks)
             batch_num += 1
             os.remove(path)
-        self.serialize_data(self.embeddings_path, data, 
-                            mode=mode, debug=self.debug)
+        # convert to numpy and strings to S90 for hdf5 compatibility
+        data = {k:np.array(v) for k,v in data.items()}
+        if len(data['image_paths']) > 0:
+            data['image_paths'] = data['image_paths'].astype('S90')
+        self.serialize_data(self.embeddings_path, data, mode=mode, 
+                            debug=self.debug)
     
     
     def frames2batch(self, in_q, out_q,):
@@ -368,16 +366,18 @@ class FaceEmbeddings:
             # None is a signal to break out
             if frame is None:
                 if len(batch) > 0:
-                    path = os.path.join(self.tmp_dir, '{}.pkl'.format(i))
-                    self.serialize_data(path, data=batch, mode='wb')
+                    path = os.path.join(self.tmp_dir, '{}.hdf5'.format(i))
+                    self.serialize_data(path, data={'batch': np.array(batch)},
+                                        chunks=False,mode='w')
                     out_q.put(path)
                 break
             else:
                 # append to queue when batch size reached
                 batch.append(frame)
                 if len(batch) == self.batch_size:
-                    path = os.path.join(self.tmp_dir, '{}.pkl'.format(i))
-                    self.serialize_data(path, data=batch, mode='wb')
+                    path = os.path.join(self.tmp_dir, '{}.hdf5'.format(i))
+                    self.serialize_data(path, data={'batch': np.array(batch)},
+                                            chunks=False,mode='w')
                     i += 1
                     out_q.put(path)
                     if self.debug: print('in', in_q.qsize(), 'out', out_q.qsize())
@@ -426,7 +426,7 @@ class FaceEmbeddings:
                 config.gpu_options.allow_growth = True
                 with tf.compat.v1.Session(graph=self.detector, config=config) as self.sess:
                     for i,vid in enumerate(tqdm(video_files, desc='Processing video')):
-                        mode = 'wb' if not file_exists else 'ab'
+                        mode = 'w' if not file_exists else 'a'
                         try:
                             self.run_video(vid, mode)
                             file_exists = True
@@ -435,7 +435,7 @@ class FaceEmbeddings:
                             continue
         else:
             for i,vid in enumerate(tqdm(video_files, desc='Processing video')):
-                mode = 'wb' if not file_exists else 'ab'
+                mode = 'w' if not file_exists else 'a'
                 try:
                     self.run_video(vid, mode)
                     file_exists = True
@@ -452,14 +452,14 @@ if __name__ == '__main__':
     tmp_dir = get_abs_path(__file__, TMP_DIR, depth=FILE_DEPTH)
     create_dir(out_dir, True)
     create_dir(tmp_dir, True)
-    embedding_filepath = get_abs_path(__file__, WRITE_EMBEDDINGS, depth=FILE_DEPTH)
-    create_dir(os.path.dirname(embedding_filepath), False)
+    detections_filepath = get_abs_path(__file__, WRITE_DETECTIONS, depth=FILE_DEPTH)
+    create_dir(os.path.dirname(detections_filepath), False)
     detector_weights = {k:get_abs_path(__file__, f, depth=FILE_DEPTH) for \
                                 k,f in DETECTOR_WEIGHTS.items()}
     # create class and load face detector and recognizer
     torch.manual_seed(100)
     mp.set_start_method('spawn', force=True)
-    faces = FaceEmbeddings(out_dir, embedding_filepath, BATCH_SIZE, tmp_dir,
+    faces = FaceEmbeddings(out_dir, detections_filepath, BATCH_SIZE, tmp_dir,
                            FACE_CONFIDENCE, min_spatial=MIN_SPATIAL,
                            skip_frames=EVERY_NTH_FRAME,
                            crop_frames=CROP_FRAMES, resize_frames=RESIZE_FRAMES,

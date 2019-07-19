@@ -5,7 +5,7 @@ Utility functions
 
 import os, shutil
 import cv2
-import pickle
+import pickle, h5py
 
 
 def create_dir(dir_path, empty_if_exists=True):
@@ -137,3 +137,61 @@ def write_dict(filepath, data, print_keys=False):
         for k,v in data.items():
             print(f'Wrote {len(v)} {k}')
     return data
+
+
+def load_hdf(filepath, keys=None, print_results=False):
+    '''
+    Loads hdf5 keys into dictionary
+    infer keys from file if not provided
+    '''
+    data = {}
+    with h5py.File(filepath, 'r') as f:
+        if keys is None: keys = f.keys()
+        for k in keys:
+            data[k] = f[k][:]
+            if print_results:
+                print(f'Dataset {k} loaded with {len(data[k])} lines')
+    return data
+
+
+def create_hdf(filepath, data_dict, chunks=True, chunk_size=10000, 
+              max_shape=None, print_results=False):
+    '''
+    Create a new hdf5 object on disk
+    '''
+    with h5py.File(filepath, 'w') as f:
+        for k,v in data_dict.items():
+            if chunks:
+                d_chunks = (chunk_size, *v.shape[1:])
+                d_shape = (max_shape, *v.shape[1:])
+                opts = {'chunks': d_chunks, 'maxshape': d_shape}
+            else:
+                opts = {'chunks': None}
+            f.create_dataset(k, data=v, **opts)
+            if print_results:
+                print(f'dataset {k} with {len(v)} lines created in {filepath}')
+                
+                
+def append_to_hdf(filepath, data_dict, print_results=False):
+    '''
+    Add new rows to hdf datasets
+    '''
+    with h5py.File(filepath, 'a') as f:
+        for k,v in data_dict.items():
+            dset = f[k]
+            start = dset.shape[0]
+            dset.resize(start + v.shape[0], axis=0)
+            dset[start:] = v
+            if print_results:
+                print(f'{len(v)} lines appended to {k}, now {dset.shape[0]}')
+                
+                
+def get_cmd_argv(argv, index, default='test'):
+    '''
+    Get configs from command line or default to 'test'
+    '''
+    try:
+        val = argv[index]
+    except IndexError:
+        val = default
+    return val
