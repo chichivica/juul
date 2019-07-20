@@ -1,9 +1,9 @@
 #!/bin/sh
 # Main script
 
-query_date=$(date -d "-$1 days" +'%Y-%m-%d')
+query_date=$(date -d "-$2 days" +'%Y-%m-%d')
 
-stage=docker
+stage=$1
 
 python3.7 src/face_detector.py $stage $query_date
 python3.7 src/facenet_embeddings.py $stage

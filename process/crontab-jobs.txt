@@ -9,5 +9,4 @@
 #
 # m h  dom mon dow   command
 
-# select suspicious photos and upload to cloud
-1 0 * * * /root/people_count/run.sh > /proc/1/fd/1 2> /proc/1/fd/2
+10 0 * * * /root/people_count/run.sh juul 1 > /proc/1/fd/1 2> /proc/1/fd/2
