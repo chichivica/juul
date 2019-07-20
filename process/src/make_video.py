@@ -19,29 +19,23 @@ from tqdm import tqdm
 project_dir = os.path.dirname(os.path.dirname(__file__))
 if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
-from src.utils import create_dir, get_abs_path, draw_rectangles, load_pkl
+from src.utils import create_dir, get_abs_path, draw_rectangles, load_hdf, get_cmd_argv
 from src import env
 
-try:
-    stage = sys.argv[1]
-except IndexError:
-    stage = 'test'
+stage = get_cmd_argv(sys.argv, 1, 'test')
 assert stage in env.ENVIRON.keys(), f'{stage} is not in {env.ENVIRON.keys()}'
-
 configs = env.ENVIRON[stage]
+
 INPUT_VIDEO = configs['VIDEO_PATH']
 assert os.path.isfile(INPUT_VIDEO), f'Video input {INPUT_VIDEO} is not a file'
 OUTPUT_FILE = os.path.join(configs['DETECTED_FACES'].format(detector=configs['DETECTOR'],
                                                            name=configs['NAME']),
                            os.path.basename(INPUT_VIDEO))
-DATA_FILE = configs['WRITE_EMBEDDINGS'].format(detector=configs['DETECTOR'],
+DATA_FILE = configs['WRITE_DETECTIONS'].format(detector=configs['DETECTOR'],
                                                name=configs['NAME'])
-CLUSTER_LABELS = configs['WRITE_CLUSTERS'].format(detector=configs['DETECTOR'],
-                                                    name=configs['NAME'])
-CLUSTER_TIMES = configs['WRITE_SEEN_TIMES'].format(detector=configs['DETECTOR'],
-                                                       name=configs['NAME'])
-CLUSTER_DEMOGRAPHICS = configs['WRITE_DEMOGRAPHICS'].format(detector=configs['DETECTOR'],
-                                                              name=configs['NAME'])
+CLUSTER_LABELS = configs['WRITE_CLUSTERS'].format(name=configs['NAME'])
+CLUSTER_TIMES = configs['WRITE_SEEN_TIMES'].format(name=configs['NAME'])
+CLUSTER_DEMOGRAPHICS = configs['WRITE_DEMOGRAPHICS'].format(name=configs['NAME'])
 START_FRAME = 0
 END_FRAME = None
 START_X = configs['CROP_FRAMES']['left']
@@ -73,8 +67,7 @@ class DemoVideo:
             assert os.path.exists(f), '{} does not exist'.format(f)
         out_dir = os.path.dirname(output_file)
         assert os.path.exists(out_dir), '{} dir not exists'.format(out_dir)
-        with open(data, 'rb') as f:
-            self.data = pickle.load(f)
+        self.data = load_hdf(data, print_results=True)
         self.input_file = input_file
         self.output_file = output_file
         self.cluster_labels = None if cluster_labels is None else np.load(cluster_labels)

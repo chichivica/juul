@@ -39,10 +39,10 @@ MIN_HEIGHT = 65
 TIME_CHUNKS = 22
 EMPLOYEE_CHUNKS = TIME_CHUNKS // 3
 MIN_SECONDS = 15
-DISCARD_SMALL_CLUSTERS = True
-DISCARD_EMPLOYEES = True
-DISCARD_SHORT_TIMERS = True
-DISCARD_LOW_SILHOUETTE = True
+DISCARD_SMALL_CLUSTERS = False
+DISCARD_EMPLOYEES = False
+DISCARD_SHORT_TIMERS = False
+DISCARD_LOW_SILHOUETTE = False
 MIN_BLUR_VAR = 80
 MAX_BLUR_VAR = 450
 
@@ -429,7 +429,7 @@ if __name__ == '__main__':
     final_clusters[target_indices] = clusters # clusters
     final_clusters[abnormal_blur_indices] = -5
     final_clusters[nonfrontal_indices] = -6
-    final_clusters[low_silh_indices] = -7
+    if DISCARD_LOW_SILHOUETTE: final_clusters[low_silh_indices] = -7
     test_counts(final_clusters, test_lens)
     uniq_clusters = len(set(final_clusters[final_clusters >= 0]))
     assert len(seen_times) == uniq_clusters, f'Number of clusters in np and csv do not match'
