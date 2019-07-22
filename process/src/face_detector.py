@@ -97,7 +97,8 @@ class FaceEmbeddings:
         self.stop_at_frame = stop_at_frame
         self.start_at_frame = start_at_frame
         self.print_time = True
-        self.debug = False
+        self.debug = True
+        self.queue_max = 10
         self.fps = 20
     
     
@@ -144,7 +145,8 @@ class FaceEmbeddings:
         self.fps = cap.get(cv2.CAP_PROP_FPS)
         frame_num = 0
         while cap.isOpened():
-            ret, frame = cap.read()
+#            ret, frame = cap.read()
+            ret = cap.grab()
             # if unable to read then quit and add last batch to queue
             if not ret:
                 if self.debug:
@@ -157,6 +159,11 @@ class FaceEmbeddings:
                     continue
             # take every n-th frame
             if frame_num % self.skip_frames == 0:
+                ret, frame = cap.retrieve()
+                if not ret:
+                    if self.debug:
+                        print(f'Could not read {frame_num} frame from {video_file}')
+                    break
                 if self.detector_ != 'mtcnn':  # pytorch-mtcnn uses bgr
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 if self.crop_frames:
@@ -393,14 +400,14 @@ class FaceEmbeddings:
         video_name = base_name.split('.')[0]
         assert self.detector, 'Load models first'
         # define producer/consumer queues and processes
-        frames_queue = Queue()
+        frames_queue = Queue(maxsize = 2 * self.batch_size)
         producer = Thread(target=self.get_frames, args=(video_path, frames_queue))
         if self.detector_ == 'mtcnn':
-            batches_queue = mpQueue()
+            batches_queue = mpQueue(maxsize = self.queue_max)
             consumer = mp.Process(target=self.process_batches, 
                                   args=(batches_queue, video_name, mode))
         else:
-            batches_queue = Queue()
+            batches_queue = Queue(maxsize = self.queue_max)
             consumer = Thread(target=self.process_batches, 
                               args=(batches_queue, video_name, mode))
         # launch process
