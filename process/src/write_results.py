@@ -20,8 +20,8 @@ col_mapping = {
         'time_min': 'period_begin',
         'time_max': 'period_end',
         'cluster': 'id',
-        'first_image': 'photo_begin',
-        'last_image': 'photo_end',
+        'photo_begin': 'photo_begin',
+        'photo_end': 'photo_end',
         }
 
 convert_timestamps = ['time_min', 'time_max']
@@ -75,9 +75,11 @@ class DBConnector:
 if __name__ == '__main__':
     # get configs
     stage = get_cmd_argv(sys.argv, 1, 'test')
+    q_date = get_cmd_argv(sys.argv, 2, None)
     configs = env.ENVIRON[stage]
     db_params = configs['DB_CONNECTION']
-    clustering_results = configs['WRITE_SEEN_TIMES'].format(name=configs['NAME'])
+    clustering_results = configs['WRITE_RESULTS'].format(name=configs['NAME'],
+                                                        date=q_date)
     # write
     file = get_abs_path(__file__, clustering_results, depth=2)
     db = DBConnector(db_params)

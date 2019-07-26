@@ -4,8 +4,6 @@ USER root
 
 RUN apt-get update && apt-get -y install cron wget git 
 RUN export DEBIAN_FRONTEND=noninteractive
-#RUN apt-get update && apt-get -y install tzdata
-#RUN echo "Europe/Moscow" > /etc/timezone && rm -f /etc/localtime && dpkg-reconfigure -f noninteractive tzdata
 ENV TZ=Europe/Moscow
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 

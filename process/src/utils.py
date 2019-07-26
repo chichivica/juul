@@ -49,7 +49,7 @@ def get_file_list(path, extensions):
         return [path]
     
     
-def draw_rectangles(image, rects, colors, texts=None, **kwargs):
+def draw_rectangles(image, rects, colors=None, texts=None, **kwargs):
     '''
     Draw one or multiple rectangles
     '''
@@ -59,30 +59,14 @@ def draw_rectangles(image, rects, colors, texts=None, **kwargs):
     for c,rect in enumerate(rects):
         p1 = tuple(rect[:2])
         p2 = tuple(rect[2:])
-        cv2.rectangle(image, p1, p2, colors[c], 2)
+        col = (0,255,255) if colors is None else colors[c]
+        cv2.rectangle(image, p1, p2, col, 2)
         if texts is not None:
             text = texts[c]
             if text != '':
                 cv2.putText(image, text, p1, **text_configs)
     
     
-#def mtcnn_detections2crops(batch_detections, confidence_threshold=0.95):
-#    '''
-#    Get a list of detections from MTCNN and return list of crops
-#    '''
-#    rects, confs, indices = [], [], []
-#    for f_n,image_detections in enumerate(batch_detections):
-#        for d_n,detected in enumerate(image_detections):
-#            if detected['confidence'] > confidence_threshold:
-#                left,top,w,h = detected['box']
-#                right = left + w
-#                bottom = top + h
-#                rects.append((left,top,right,bottom))
-#                confs.append(detected['confidence'])
-#                indices.append((f_n, d_n))
-#    return rects, confs, indices
-
-
 def mtcnn_detections2crops(batch_detections, batch_landmarks):
     '''
     Get a list of detections from pytorch-mtcnn and 

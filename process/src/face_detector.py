@@ -36,10 +36,7 @@ if __name__ == '__main__':
     FACE_CONFIDENCE = configs['FACE_CONFIDENCE']
     EVERY_NTH_FRAME = configs['EVERY_NTH_FRAME']
     q_date = get_cmd_argv(sys.argv, 2, default=None)
-    if q_date is None:
-        VIDEO_PATH = configs['VIDEO_PATH']
-    else:
-        VIDEO_PATH = configs['VIDEO_PATH'].format(date = q_date)
+    VIDEO_PATH = configs['VIDEO_PATH'].format(date = q_date)
     DETECTED_FACES = configs['DETECTED_FACES'].format(detector=configs['DETECTOR'],
                                                       name=configs['NAME'])
     TMP_DIR = configs['TMP_DIR']

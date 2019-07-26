@@ -25,12 +25,13 @@ from sklearn.metrics import silhouette_score, silhouette_samples, pairwise_dista
 project_dir = os.path.dirname(os.path.dirname(__file__))
 if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
-from src.utils import create_dir, get_abs_path, load_hdf, get_cmd_argv
+from src.utils import create_dir, get_abs_path, load_hdf, get_cmd_argv, create_hdf
 from src import env
+from src.facenet_embeddings import get_facenet_paths, compute_embeddings
 
 
 CW_THRESHOLD = 0.95
-SILHOUETTE_THRESHOLD = 0.04
+SILHOUETTE_THRESHOLD = 0.15
 STEP_SIZE = 5000
 EUCLIDEAN_THRESHOLD = 0.85
 MIN_CLUSTER_SIZE = 3
@@ -45,6 +46,8 @@ DISCARD_SHORT_TIMERS = True
 DISCARD_LOW_SILHOUETTE = True
 MIN_BLUR_VAR = 80
 MAX_BLUR_VAR = 450
+BATCH_SIZE = 256
+IMAGE_SIZE = 160
 
 
 def dlib_chinese_whispers(array_of_features, threshold):
@@ -292,7 +295,7 @@ def cluster_results(features, labels):
     print(f'Silhouette score: {score}')
     
     
-def select_high_silhouette(embeddings, labels, silh_threshold):
+def select_high_silhouette(embeddings, labels, silh_threshold, save_scores=None):
     '''
     Get cluster labels with high silhouette score
     and select their indices from labels array
@@ -304,6 +307,9 @@ def select_high_silhouette(embeddings, labels, silh_threshold):
                 'cluster': labels,
                 })
     cluster_scores = silh_df.groupby('cluster').agg({'score': ['mean','count']})
+    if save_scores:
+        cluster_scores.to_csv(save_scores, index=True)
+        print(f'{len(cluster_scores)} silh.scores saved to {save_scores}')
     high_silh_clusters = \
         cluster_scores.loc[cluster_scores[('score', 'mean')] > silh_threshold]\
                         .index.values
@@ -325,12 +331,14 @@ def test_counts(final_labels, correct_len):
             assert cnt == cor, f'Mismatch @ {lab}, it is {cnt} but has to be {cor}'
 
 
-def first_last_image(clusters, seen_times, timestamps, image_paths):
+def first_last_image(clusters, seen_times, timestamps, image_paths, boxes):
     '''
     For each image find a path to first and last image
+    also get bounding boxes
     '''
     assert len(clusters) == len(timestamps) == len(image_paths)
     first_images,last_images = [],[]
+    start_boxes,end_boxes = [],[]
     for i,row in seen_times.iterrows():
         clust_ind = np.argwhere(clusters == row['cluster']).squeeze(1)
         min_time_ind = timestamps[clust_ind].argmin()
@@ -338,8 +346,13 @@ def first_last_image(clusters, seen_times, timestamps, image_paths):
         first_image = image_paths[clust_ind][min_time_ind]
         last_image = image_paths[clust_ind][max_time_ind]
         first_images.append(first_image),last_images.append(last_image)
+        begin_box = tuple(boxes[clust_ind][min_time_ind])
+        end_box = tuple(boxes[clust_ind][max_time_ind])
+        start_boxes.append(begin_box),end_boxes.append(end_box)
     seen_times['first_image'] = first_images
     seen_times['last_image'] = last_images
+    seen_times['first_box'] = start_boxes
+    seen_times['last_box'] = end_boxes
     assert seen_times.isna().any().sum() == 0
     return seen_times
     
@@ -347,21 +360,25 @@ def first_last_image(clusters, seen_times, timestamps, image_paths):
 if __name__ == '__main__':
     # get stage
     stage = get_cmd_argv(sys.argv, 1, 'test')
+    q_date = get_cmd_argv(sys.argv, 2, None)
     configs = env.ENVIRON[stage]
     INPUT_DATA = configs['WRITE_EMBEDDINGS'].format(recognition=configs['RECOGNITION'],
                                                     name=configs['NAME'])
     INPUT_FILE = configs['WRITE_DETECTIONS'].format(detector=configs['DETECTOR'],
                                                     name=configs['NAME'])
     WRITE_CLUSTERS = configs['WRITE_CLUSTERS'].format(name=configs['NAME'])
-    WRITE_SEEN_TIMES = configs['WRITE_SEEN_TIMES'].format(name=configs['NAME'])
+    WRITE_RESULTS = configs['WRITE_RESULTS'].format(name=configs['NAME'],
+                                                    date=q_date)
+    WRITE_SILHOUETTE = configs['WRITE_SILHOUETTE'].format(name=configs['NAME'])
     # prepare folders
     input_data = get_abs_path(__file__, INPUT_DATA, depth=2)
     file = get_abs_path(__file__, INPUT_FILE, depth=2)
     out = get_abs_path(__file__, WRITE_CLUSTERS, depth=2)
-    out_times = get_abs_path(__file__, WRITE_SEEN_TIMES, depth=2)
+    out_silhouette = get_abs_path(__file__, WRITE_SILHOUETTE, depth=2)
+    out_results = get_abs_path(__file__, WRITE_RESULTS, depth=2)
     create_dir(os.path.dirname(out), False)
+    create_dir(os.path.dirname(out_results), False)
     # get input data
-    embeddings = load_hdf(input_data, print_results=True)['embeddings']
     data = load_hdf(file, print_results=True)
     decode_fn = lambda x: x.decode('utf-8')
     image_paths = np.array(list(map(decode_fn, data['image_paths'])))
@@ -383,8 +400,18 @@ if __name__ == '__main__':
     abnormal_blur_indices = np.setdiff1d(target_indices,target_indices[is_normal])
     target_indices = target_indices[is_normal]
     test_lens[-5] = len(target_images) - len(target_indices)
+    # load or calculate embeddings
+    if os.path.exists(input_data):
+        embeddings = load_hdf(input_data, print_results=True)['embeddings']
+        embeddings = embeddings[target_indices]
+    else:
+        print(f'{input_data} not found. Calculating embeddings...')
+        target_images = image_paths[target_indices]
+        _,write_emb,model_path = get_facenet_paths(configs)
+        embeddings = compute_embeddings(model_path, target_images, 
+                                        BATCH_SIZE, IMAGE_SIZE)
+        create_hdf(write_emb, {'embeddings': embeddings}, print_results=True)
     # cluster embeddings
-    embeddings = embeddings[target_indices]
     if len(embeddings) > STEP_SIZE:
         paired,clusters = multi_stage_clustering(embeddings, STEP_SIZE, 
                                                  MIN_CLUSTER_SIZE, EUCLIDEAN_THRESHOLD,
@@ -394,7 +421,8 @@ if __name__ == '__main__':
         clusters = dlib_chinese_whispers(embeddings, CW_THRESHOLD)
     # select clusters with high silhouette score
     if DISCARD_LOW_SILHOUETTE:
-        is_target = select_high_silhouette(embeddings, clusters, SILHOUETTE_THRESHOLD)
+        is_target = select_high_silhouette(embeddings, clusters, 
+                                           SILHOUETTE_THRESHOLD, out_silhouette)
         low_silh_indices = target_indices[~is_target]
         target_indices = target_indices[is_target]
         clusters = clusters[is_target]
@@ -434,7 +462,8 @@ if __name__ == '__main__':
     uniq_clusters = len(set(final_clusters[final_clusters >= 0]))
     assert len(seen_times) == uniq_clusters, f'Number of clusters in np and csv do not match'
     np.save(out, final_clusters)
-    seen_times = first_last_image(final_clusters, seen_times, timestamps, image_paths)
-    seen_times.to_csv(out_times, index=False)
+    seen_times = first_last_image(final_clusters, seen_times, timestamps, 
+                                  image_paths, data['boxes'])
+    seen_times.to_csv(out_results, index=False)
     print(f'{uniq_clusters} cluster labels saved to {out}')
-    print(f'{uniq_clusters} cluster seen times saved to {out_times}')
+    print(f'{uniq_clusters} cluster seen times saved to {out_results}')

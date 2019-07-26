@@ -59,10 +59,12 @@ def compute_embeddings(model_path, image_paths, batch_size, image_size):
                                  f'batch size {batch_size}')
     return embeddings
 
-if __name__ == '__main__':
-    # get configs
-    stage = get_cmd_argv(sys.argv, 1, 'test')
-    configs = env.ENVIRON[stage]
+
+def get_facenet_paths(configs):
+    '''
+    From configs get input image paths, output hdf for embeddings and 
+    model path
+    '''
     INPUT_FILE = configs['WRITE_DETECTIONS'].format(detector=configs['DETECTOR'],
                                                     name=configs['NAME'])
     OUTPUT_FILE = configs['WRITE_EMBEDDINGS'].format(recognition=configs['RECOGNITION'],
@@ -72,8 +74,16 @@ if __name__ == '__main__':
     input_file = get_abs_path(__file__, INPUT_FILE , depth=2)
     output_file = get_abs_path(__file__, OUTPUT_FILE , depth=2)
     model_path = get_abs_path(__file__, MODEL_PATH , depth=2)
+    return input_file, output_file, model_path
+    
+
+if __name__ == '__main__':
+    # get configs
+    stage = get_cmd_argv(sys.argv, 1, 'test')
+    configs = env.ENVIRON[stage]
+    input_file, output_file, model_path = get_facenet_paths(configs)
     # load image paths
-    image_paths = load_hdf(INPUT_FILE, keys=['image_paths'], print_results=True)['image_paths']
+    image_paths = load_hdf(input_file, keys=['image_paths'], print_results=True)['image_paths']
     image_paths = list(map(lambda x: x.decode('utf-8'), image_paths))
     # get embeddings
     embeddings = compute_embeddings(model_path, image_paths, BATCH_SIZE, IMAGE_SIZE)

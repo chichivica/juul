@@ -12,20 +12,15 @@ import subprocess
 project_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
-from src.utils import create_dir, get_abs_path, load_hdf
+from src.utils import create_dir, get_abs_path, load_hdf, get_cmd_argv
 from src import env
 
-try:
-    stage = sys.argv[1]
-except IndexError:
-    stage = 'test'
-assert stage in env.ENVIRON.keys(), f'{stage} is not in {env.ENVIRON.keys()}'
+stage = get_cmd_argv(sys.argv, 1, 'test')
 config = env.ENVIRON[stage]
 
 OUT_DIR = 'data/interim/{}_clustered'.format(config['NAME'])
-CLUSTER_LABELS = config['WRITE_CLUSTERS'].format(name=config['NAME'],
-                                                 detector=config['DETECTOR'])
-DATA_FILE = config['WRITE_EMBEDDINGS'].format(name=config['NAME'],
+CLUSTER_LABELS = config['WRITE_CLUSTERS'].format(name=config['NAME'])
+DATA_FILE = config['WRITE_DETECTIONS'].format(name=config['NAME'],
                                               detector=config['DETECTOR'])
 
 if __name__ == '__main__':
