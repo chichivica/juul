@@ -30,13 +30,14 @@ from src import env
 from src.facenet_embeddings import get_facenet_paths, compute_embeddings
 
 
-CW_THRESHOLD = 0.95
-SILHOUETTE_THRESHOLD = 0.15
+CW_THRESHOLD = 0.9
+CLUSTER_SILHOUETTE_THRESHOLD = -0.001
+INDIVIDUAL_SILHOUETTE_THRESHOLD = 0.001
 STEP_SIZE = 5000
-EUCLIDEAN_THRESHOLD = 0.85
+EUCLIDEAN_THRESHOLD = 0.9
 MIN_CLUSTER_SIZE = 3
-MIN_WIDTH = 55
-MIN_HEIGHT = 65
+MIN_WIDTH = 60
+MIN_HEIGHT = 80
 TIME_CHUNKS = 22
 EMPLOYEE_CHUNKS = TIME_CHUNKS // 3
 MIN_SECONDS = 15
@@ -295,7 +296,9 @@ def cluster_results(features, labels):
     print(f'Silhouette score: {score}')
     
     
-def select_high_silhouette(embeddings, labels, silh_threshold, save_scores=None):
+def select_high_silhouette(embeddings, labels, image_paths,
+                           cluster_threshold, individual_threshold, 
+                           save_scores=None):
     '''
     Get cluster labels with high silhouette score
     and select their indices from labels array
@@ -305,18 +308,31 @@ def select_high_silhouette(embeddings, labels, silh_threshold, save_scores=None)
     silh_df = pd.DataFrame({
                 'score': silh_scores,
                 'cluster': labels,
+                'path': image_paths,
                 })
-    cluster_scores = silh_df.groupby('cluster').agg({'score': ['mean','count']})
+    # STEP 1 - select clusters with mean silhouette above threshold
+    cluster_scores = silh_df.groupby('cluster')\
+                            .agg({'score': ['mean','median','count']})
     if save_scores:
-        cluster_scores.to_csv(save_scores, index=True)
+        silh_df.to_csv(save_scores, index=False)
         print(f'{len(cluster_scores)} silh.scores saved to {save_scores}')
+    cluster_threshold = max(cluster_threshold, 
+                            np.quantile(cluster_scores[('score','median')], 0.05))
     high_silh_clusters = \
-        cluster_scores.loc[cluster_scores[('score', 'mean')] > silh_threshold]\
+        cluster_scores.loc[cluster_scores[('score', 'median')] > cluster_threshold]\
                         .index.values
     isin_fn = lambda x: x in high_silh_clusters
     is_target = np.array(list(map(isin_fn, labels)))
-    print(f'{len(high_silh_clusters)} clusters have silhouette score above {silh_threshold} '
+    print(f'{len(high_silh_clusters)} clusters have silhouette score above {cluster_threshold} '
           f'corresponding to {is_target.sum()} out of {len(is_target)} values')
+    # STEP 2 - select cluster members that have silhouette score above 0 
+    # in each cluster
+    for clust in high_silh_clusters:
+        within_cluster = silh_scores[labels == clust]
+        ind_threshold = max(individual_threshold,
+                            np.quantile(within_cluster, 0.1))
+        is_target[labels == clust] = within_cluster > ind_threshold
+    print(f'{is_target.sum()} points left after cleanup')
     return is_target
 
 
@@ -410,7 +426,9 @@ if __name__ == '__main__':
         _,write_emb,model_path = get_facenet_paths(configs)
         embeddings = compute_embeddings(model_path, target_images, 
                                         BATCH_SIZE, IMAGE_SIZE)
-        create_hdf(write_emb, {'embeddings': embeddings}, print_results=True)
+        full_embeddings = np.zeros((len(image_paths), 512))
+        full_embeddings[target_indices] = embeddings
+        create_hdf(write_emb, {'embeddings': full_embeddings}, print_results=True)
     # cluster embeddings
     if len(embeddings) > STEP_SIZE:
         paired,clusters = multi_stage_clustering(embeddings, STEP_SIZE, 
@@ -421,8 +439,10 @@ if __name__ == '__main__':
         clusters = dlib_chinese_whispers(embeddings, CW_THRESHOLD)
     # select clusters with high silhouette score
     if DISCARD_LOW_SILHOUETTE:
-        is_target = select_high_silhouette(embeddings, clusters, 
-                                           SILHOUETTE_THRESHOLD, out_silhouette)
+        is_target = select_high_silhouette(embeddings, clusters, image_paths[target_indices],
+                                           CLUSTER_SILHOUETTE_THRESHOLD,
+                                           INDIVIDUAL_SILHOUETTE_THRESHOLD,
+                                           out_silhouette)
         low_silh_indices = target_indices[~is_target]
         target_indices = target_indices[is_target]
         clusters = clusters[is_target]
@@ -430,7 +450,8 @@ if __name__ == '__main__':
     # get times of first and last seen, frequencies
     target_timestamps = timestamps[target_indices]
     splits = make_splits(target_timestamps, TIME_CHUNKS)
-    seen_times = first_last_seen(clusters, target_timestamps, splits, cond='cluster >= 0')
+    seen_times = first_last_seen(clusters, target_timestamps, splits, 
+                                 cond='cluster >= 0')
     if DISCARD_SMALL_CLUSTERS:
         # correct small clusters
         small_clusters = small_cluster_labels(clusters, MIN_CLUSTER_SIZE)
