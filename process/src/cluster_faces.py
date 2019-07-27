@@ -26,29 +26,32 @@ project_dir = os.path.dirname(os.path.dirname(__file__))
 if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
 from src.utils import create_dir, get_abs_path, load_hdf, get_cmd_argv, create_hdf
-from src import env
 from src.facenet_embeddings import get_facenet_paths, compute_embeddings
+from src.env import configs
 
+FILE_DEPTH = 2
 
-CW_THRESHOLD = 0.9
-CLUSTER_SILHOUETTE_THRESHOLD = -0.001
-INDIVIDUAL_SILHOUETTE_THRESHOLD = 0.001
-STEP_SIZE = 5000
-EUCLIDEAN_THRESHOLD = 0.9
-MIN_CLUSTER_SIZE = 3
-MIN_WIDTH = 60
-MIN_HEIGHT = 80
-TIME_CHUNKS = 22
+CW_THRESHOLD = float(os.environ.get('CHINESE_WHISPERING_THRESHOLD', 0.9))
+CLUSTER_SILHOUETTE_THRESHOLD = float(os.environ.get('CLUSTER_SILHOUETTE_THRESHOLD',
+                                                    -0.001))
+INDIVIDUAL_SILHOUETTE_THRESHOLD = float(os.environ.get('INDIVIDUAL_SILHOUETTE_THRESHOLD',
+                                                       0.001))
+STEP_SIZE = int(os.environ.get('CW_STEP_SIZE', 5000))
+EUCLIDEAN_THRESHOLD = float(os.environ.get('EUCLIDEAN_THRESHOLD', 0.9))
+MIN_CLUSTER_SIZE = int(os.environ.get('MIN_CLUSTER_SIZE', 3))
+MIN_WIDTH = int(os.environ.get('BOX_MIN_WIDTH', 60))
+MIN_HEIGHT = int(os.environ.get('BOX_MIN_HEIGHT', 80))
+TIME_CHUNKS = int(os.environ.get('FREQUENCY_CHUNKS', 22))
 EMPLOYEE_CHUNKS = TIME_CHUNKS // 3
-MIN_SECONDS = 15
-DISCARD_SMALL_CLUSTERS = True
-DISCARD_EMPLOYEES = True
-DISCARD_SHORT_TIMERS = True
-DISCARD_LOW_SILHOUETTE = True
-MIN_BLUR_VAR = 80
-MAX_BLUR_VAR = 450
-BATCH_SIZE = 256
-IMAGE_SIZE = 160
+MIN_SECONDS = int(os.environ.get('CUSTOMER_MIN_SECONDS',15))
+DISCARD_SMALL_CLUSTERS = eval(os.environ.get('DISCARD_SMALL_CLUSTERS','True'))
+DISCARD_EMPLOYEES = eval(os.environ.get('DISCARD_EMPLOYEES', 'True'))
+DISCARD_SHORT_TIMERS = eval(os.environ.get('DISCARD_SHORT_TIMERS', 'True'))
+DISCARD_LOW_SILHOUETTE = eval(os.environ.get('DISCARD_LOW_SILHOUETTE', 'True'))
+MIN_BLUR_VAR = int(os.environ.get('MIN_BLUR_VARIANCE', 80))
+MAX_BLUR_VAR = int(os.environ.get('MAX_BLUR_VARIANCE', 450))
+BATCH_SIZE = int(os.environ.get('FACENET_BATCH_SIZE', 256))
+IMAGE_SIZE = int(os.environ.get('FACENET_IMAGE_SIZE', 160))
 
 
 def dlib_chinese_whispers(array_of_features, threshold):
@@ -374,24 +377,22 @@ def first_last_image(clusters, seen_times, timestamps, image_paths, boxes):
     
 
 if __name__ == '__main__':
-    # get stage
-    stage = get_cmd_argv(sys.argv, 1, 'test')
-    q_date = get_cmd_argv(sys.argv, 2, None)
-    configs = env.ENVIRON[stage]
+    # get configs and paths
+    q_name = get_cmd_argv(sys.argv, 2, 'test')
+    q_date = get_cmd_argv(sys.argv, 1, None)
     INPUT_DATA = configs['WRITE_EMBEDDINGS'].format(recognition=configs['RECOGNITION'],
-                                                    name=configs['NAME'])
+                                                    name=q_name)
     INPUT_FILE = configs['WRITE_DETECTIONS'].format(detector=configs['DETECTOR'],
-                                                    name=configs['NAME'])
-    WRITE_CLUSTERS = configs['WRITE_CLUSTERS'].format(name=configs['NAME'])
-    WRITE_RESULTS = configs['WRITE_RESULTS'].format(name=configs['NAME'],
-                                                    date=q_date)
-    WRITE_SILHOUETTE = configs['WRITE_SILHOUETTE'].format(name=configs['NAME'])
+                                                    name=q_name)
+    WRITE_CLUSTERS = configs['WRITE_CLUSTERS'].format(name=q_name)
+    WRITE_RESULTS = configs['WRITE_RESULTS'].format(name=q_name, date=q_date)
+    WRITE_SILHOUETTE = configs['WRITE_SILHOUETTE'].format(name=q_name)
     # prepare folders
-    input_data = get_abs_path(__file__, INPUT_DATA, depth=2)
-    file = get_abs_path(__file__, INPUT_FILE, depth=2)
-    out = get_abs_path(__file__, WRITE_CLUSTERS, depth=2)
-    out_silhouette = get_abs_path(__file__, WRITE_SILHOUETTE, depth=2)
-    out_results = get_abs_path(__file__, WRITE_RESULTS, depth=2)
+    input_data = get_abs_path(__file__, INPUT_DATA, depth=FILE_DEPTH)
+    file = get_abs_path(__file__, INPUT_FILE, depth=FILE_DEPTH)
+    out = get_abs_path(__file__, WRITE_CLUSTERS, depth=FILE_DEPTH)
+    out_silhouette = get_abs_path(__file__, WRITE_SILHOUETTE, depth=FILE_DEPTH)
+    out_results = get_abs_path(__file__, WRITE_RESULTS, depth=FILE_DEPTH)
     create_dir(os.path.dirname(out), False)
     create_dir(os.path.dirname(out_results), False)
     # get input data
@@ -417,13 +418,16 @@ if __name__ == '__main__':
     target_indices = target_indices[is_normal]
     test_lens[-5] = len(target_images) - len(target_indices)
     # load or calculate embeddings
-    if os.path.exists(input_data):
+    if configs['RECOGNITION'] == 'dlib':
+        print('Loading DLIB resnet embeddings')
+        embeddings = data['embeddings'][target_indices]
+    elif os.path.exists(input_data):
         embeddings = load_hdf(input_data, print_results=True)['embeddings']
         embeddings = embeddings[target_indices]
     else:
         print(f'{input_data} not found. Calculating embeddings...')
         target_images = image_paths[target_indices]
-        _,write_emb,model_path = get_facenet_paths(configs)
+        _,write_emb,model_path = get_facenet_paths(configs, q_name)
         embeddings = compute_embeddings(model_path, target_images, 
                                         BATCH_SIZE, IMAGE_SIZE)
         full_embeddings = np.zeros((len(image_paths), 512))

@@ -21,11 +21,13 @@ if not project_dir in sys.path: sys.path.insert(0, project_dir)
 
 facenet = importlib.import_module('src.facenet.src.facenet', project_dir)
 from src.utils import load_hdf, create_hdf, get_abs_path, get_cmd_argv
-from src import env
+from src.env import configs
 
 
-BATCH_SIZE = 256
-IMAGE_SIZE = 160
+FILE_DEPTH = 2
+
+BATCH_SIZE = int(os.environ.get('FACENET_BATCH_SIZE', 256))
+IMAGE_SIZE = int(os.environ.get('FACENET_IMAGE_SIZE', 160))
 
 
 def compute_embeddings(model_path, image_paths, batch_size, image_size):
@@ -60,28 +62,27 @@ def compute_embeddings(model_path, image_paths, batch_size, image_size):
     return embeddings
 
 
-def get_facenet_paths(configs):
+def get_facenet_paths(configs, q_name):
     '''
     From configs get input image paths, output hdf for embeddings and 
     model path
     '''
     INPUT_FILE = configs['WRITE_DETECTIONS'].format(detector=configs['DETECTOR'],
-                                                    name=configs['NAME'])
+                                                    name=q_name)
     OUTPUT_FILE = configs['WRITE_EMBEDDINGS'].format(recognition=configs['RECOGNITION'],
-                                                    name=configs['NAME'])
+                                                    name=q_name)
     MODEL_PATH = configs['RECOGNITION_MODEL_PATH'][configs['RECOGNITION']]
     # adjust paths
-    input_file = get_abs_path(__file__, INPUT_FILE , depth=2)
-    output_file = get_abs_path(__file__, OUTPUT_FILE , depth=2)
-    model_path = get_abs_path(__file__, MODEL_PATH , depth=2)
+    input_file = get_abs_path(__file__, INPUT_FILE , depth=FILE_DEPTH)
+    output_file = get_abs_path(__file__, OUTPUT_FILE , depth=FILE_DEPTH)
+    model_path = get_abs_path(__file__, MODEL_PATH , depth=FILE_DEPTH)
     return input_file, output_file, model_path
     
 
 if __name__ == '__main__':
     # get configs
-    stage = get_cmd_argv(sys.argv, 1, 'test')
-    configs = env.ENVIRON[stage]
-    input_file, output_file, model_path = get_facenet_paths(configs)
+    q_name = get_cmd_argv(sys.argv, 2, 'test')
+    input_file, output_file, model_path = get_facenet_paths(configs, q_name)
     # load image paths
     image_paths = load_hdf(input_file, keys=['image_paths'], print_results=True)['image_paths']
     image_paths = list(map(lambda x: x.decode('utf-8'), image_paths))

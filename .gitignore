@@ -1,6 +1,7 @@
 .spyproject/
 process/models/
 process/data/
+process/*.txt
 *tar.gz
 stream/data/
 stream/tmp/

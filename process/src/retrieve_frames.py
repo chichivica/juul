@@ -12,12 +12,14 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import psycopg2
-import importlib
 # custom modules
 project_dir = os.path.dirname(os.path.dirname(__file__))
 if project_dir not in sys.path: sys.path.insert(0, project_dir)
 from src.utils import create_dir, get_abs_path, get_cmd_argv, draw_rectangles
-env = importlib.import_module('src.env', project_dir)
+from src.env import configs
+
+
+FILE_DEPTH = 2
 
 
 def get_video_path(full_path, video_dir, extension='mp4'):
@@ -86,18 +88,17 @@ def make_new_path(video_path, frame_number, out_dir, image_extension='jpg'):
 
 if __name__ == '__main__':
     # get configs
-    stage = get_cmd_argv(sys.argv, 1, 'test')
-    configs = env.ENVIRON[stage]
-    q_date = get_cmd_argv(sys.argv, 2, None)
+    q_name = get_cmd_argv(sys.argv, 2, 'test')
+    q_date = get_cmd_argv(sys.argv, 1, None)
     assert q_date is not None, 'provide date as 2nd argument'
     video_dir = get_abs_path(__file__, configs['VIDEO_PATH'].format(date=q_date),
-                                 depth=2)
-    data_path = get_abs_path(__file__, configs['WRITE_RESULTS'].format(name=configs['NAME'],
+                                 depth=FILE_DEPTH)
+    data_path = get_abs_path(__file__, configs['WRITE_RESULTS'].format(name=q_name,
                                                                        date=q_date),
-                             depth=2)
-    out_dir = get_abs_path(__file__, configs['WRITE_FRAMES'].format(name=configs['NAME'],
+                             depth=FILE_DEPTH)
+    out_dir = get_abs_path(__file__, configs['WRITE_FRAMES'].format(name=q_name,
                                                                        date=q_date), 
-                        depth=2)
+                        depth=FILE_DEPTH)
     create_dir(out_dir, True)
     top_adjust = configs['CROP_FRAMES']['top']
     left_adjust = configs['CROP_FRAMES']['left']

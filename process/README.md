@@ -4,18 +4,23 @@
 
 0. ``src/env.py`` - задать вручную глобальные переменные.
 1. ``python3 src/face_detector.py`` - чтение кадров из видео и детекция лиц. 
-2. ``python3 src/facenet_embeddings.py`` - расчет эмбеддингов на основе facenet.
-3. ``python3 src/cluster_faces.py`` - пред-обработка лиц, кластеризация и 
-пост-обработка кластеров
+2. ``python3 src/cluster_faces.py`` - пред-обработка лиц, расчет эмбеддингов,
+    кластеризация и пост-обработка кластеров
+3. ``python3 src/retrieve_frames.py`` - вытаскиваем первый и последний фрейм из 
+    видео для каждого клиента (после кластеризации)
 4. ``python3 src/write_results.py`` - запись результатов кластеризации в бд.
 5. ``python3 src/make_video.py`` - создание демо-видео.
 
 ### Docker
 
-- собирается образ ``docker build -t people-count:project .``
-- запускается по крону (crontab-jobs.txt) основной скрипт ``run.sh``.
-- команда запуска ``docker run -d --name project_crontime --runtime nvidia
-    -v /mnt:/mnt --restart always people-count:project``
+- сборка образа ``docker build -t people-count:project .``
+- команда запуска задач (crontab-jobs.txt) основной скрипт ``run.sh``.
+- запуск контейнера:
+    ```
+    docker run -d --name project_crontime --runtime nvidia \
+        -e "DB_PASSWORD=pwd" --env-file path_to_envfile.txt \
+        -v /mnt:/mnt --restart always people-count:project
+    ```
 
 ### Алгоритмы
 
@@ -36,6 +41,7 @@
     
 5. Пост-обработка:
     - выбрать кластеры с высоким **silhouette score** (шум)
+    - очистить кластеры, удалив изображения с низким **silhouette score**
     - отсечь кластеры с кол-вом членов менее порога (шум)
     - отсечь кластеры с длительностью  меньше порога (прохожие)
     - отсечь кластера с частотой выше порога (работники)

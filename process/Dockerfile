@@ -68,4 +68,3 @@ RUN chmod 777 src/cluster_faces.py
 RUN chmod 777 src/write_results.py
 
 CMD ["cron", "-f"]
-

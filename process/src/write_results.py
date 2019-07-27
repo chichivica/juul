@@ -13,7 +13,10 @@ project_dir = os.path.dirname(os.path.dirname(__file__))
 if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
 from src.utils import get_abs_path, get_cmd_argv
-from src import env
+from src.env import configs
+
+
+FILE_DEPTH = 2
 
 
 col_mapping = {
@@ -72,16 +75,16 @@ class DBConnector:
         self.cur.close()
         self.conn.close()
         
+        
 if __name__ == '__main__':
     # get configs
-    stage = get_cmd_argv(sys.argv, 1, 'test')
-    q_date = get_cmd_argv(sys.argv, 2, None)
-    configs = env.ENVIRON[stage]
+    q_name = get_cmd_argv(sys.argv, 2, 'test')
+    q_date = get_cmd_argv(sys.argv, 1, None)
     db_params = configs['DB_CONNECTION']
-    clustering_results = configs['WRITE_RESULTS'].format(name=configs['NAME'],
-                                                        date=q_date)
+    clustering_results = configs['WRITE_RESULTS'].format(name=q_name,
+                                                         date=q_date)
     # write
-    file = get_abs_path(__file__, clustering_results, depth=2)
+    file = get_abs_path(__file__, clustering_results, depth=FILE_DEPTH)
     db = DBConnector(db_params)
     db.add_values(file, col_mapping, convert_timestamps)
     db.insert_values('visitors')

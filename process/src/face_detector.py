@@ -27,33 +27,10 @@ from src.utils import create_dir, get_abs_path, get_file_list, \
 from src.utils import create_hdf, append_to_hdf, load_hdf, get_cmd_argv
 from src.mobilenet_ssd import get_detection_graph, graph_tensor_names,\
                                  graph_detections2crops
-from src import env
+from src.env import configs
 
 
-if __name__ == '__main__':
-    stage = get_cmd_argv(sys.argv, 1, default='test')
-    configs = env.ENVIRON[stage]
-    FACE_CONFIDENCE = configs['FACE_CONFIDENCE']
-    EVERY_NTH_FRAME = configs['EVERY_NTH_FRAME']
-    q_date = get_cmd_argv(sys.argv, 2, default=None)
-    VIDEO_PATH = configs['VIDEO_PATH'].format(date = q_date)
-    DETECTED_FACES = configs['DETECTED_FACES'].format(detector=configs['DETECTOR'],
-                                                      name=configs['NAME'])
-    TMP_DIR = configs['TMP_DIR']
-    WRITE_DETECTIONS = configs['WRITE_DETECTIONS'].format(detector=configs['DETECTOR'],
-                                                          name=configs['NAME'])
-    VIDEO_EXTENSIONS = configs['VIDEO_EXTENSIONS']
-    CROP_FRAMES = configs['CROP_FRAMES']
-    MIN_SPATIAL = configs['MIN_SPATIAL']
-    RESIZE_FRAMES = configs['RESIZE_FRAMES']
-    BEGIN_FRAME = configs['BEGIN_FRAME']
-    MAX_FRAMES = configs['MAX_FRAMES']
-    RECOGNITION_MODEL_PATH = configs['RECOGNITION_MODEL_PATH'][configs['RECOGNITION']]
-    SHAPE_PREDICTOR_PATH = configs['SHAPE_PREDICTOR_PATH']
-    DETECTOR_WEIGHTS = configs['DETECTOR_WEIGHTS']
-    BATCH_SIZE = configs['BATCH_SIZE']
-    FILE_DEPTH = configs['FILE_DEPTH']
-    DETECTOR = configs['DETECTOR']
+FILE_DEPTH = 2
 
 
 class EmptyVideoException(Exception):
@@ -93,8 +70,8 @@ class FaceEmbeddings:
         self.tmp_dir = tmp_dir
         self.stop_at_frame = stop_at_frame
         self.start_at_frame = start_at_frame
-        self.print_time = True
-        self.debug = True
+        self.print_time = configs['REQUIRE_PRINTS']
+        self.debug = configs['REQUIRE_PRINTS']
         self.queue_max = 10
         self.fps = 20
     
@@ -293,8 +270,8 @@ class FaceEmbeddings:
         Detect faces and compute embeddings on each batch of frames
         and save embeddings, timestamps, crops' paths and sizes
         '''
-    #        self.load_recognizer(RECOGNITION_MODEL_PATH, 
-    #                              shape_predictor_path=SHAPE_PREDICTOR_PATH)
+    #        self.load_recognizer(configs['RECOGNITION_MODEL_PATH'][configs['RECOGNITION']], 
+    #                              shape_predictor_path=configs['SHAPE_PREDICTOR_PATH'])
         batch_num = 0
         data = {'embeddings' : [], 'image_paths': [], 'boxes': [],
                 'timestamps': [], 'scores': [], 'indices': [],
@@ -450,28 +427,33 @@ class FaceEmbeddings:
     
     
 if __name__ == '__main__':
-    # prepare directories
-    video_dir = get_abs_path(__file__, VIDEO_PATH, depth=FILE_DEPTH)
-    out_dir = get_abs_path(__file__, DETECTED_FACES, depth=FILE_DEPTH)
-    tmp_dir = get_abs_path(__file__, TMP_DIR, depth=FILE_DEPTH)
+    # prepare directories and configs
+    q_date = get_cmd_argv(sys.argv, 1, default=None)
+    q_name = get_cmd_argv(sys.argv, 2, default='test')
+    video_dir = get_abs_path(__file__, configs['VIDEO_PATH'].format(date = q_date),
+                             depth=FILE_DEPTH)
+    out_dir = get_abs_path(__file__, configs['DETECTED_FACES'].format(detector=configs['DETECTOR'],
+                                                  name=q_name), depth=FILE_DEPTH)
+    tmp_dir = get_abs_path(__file__, configs['TMP_DIR'], depth=FILE_DEPTH)
     create_dir(out_dir, True)
     create_dir(tmp_dir, True)
-    detections_filepath = get_abs_path(__file__, WRITE_DETECTIONS, depth=FILE_DEPTH)
+    detections_filepath = get_abs_path(__file__, configs['WRITE_DETECTIONS'].format(detector=configs['DETECTOR'],
+                                               name=q_name), depth=FILE_DEPTH)
     create_dir(os.path.dirname(detections_filepath), False)
     detector_weights = {k:get_abs_path(__file__, f, depth=FILE_DEPTH) for \
-                                k,f in DETECTOR_WEIGHTS.items()}
+                                k,f in configs['DETECTOR_WEIGHTS'].items()}
     # create class and load face detector and recognizer
     torch.manual_seed(100)
     mp.set_start_method('spawn', force=True)
-    faces = FaceEmbeddings(out_dir, detections_filepath, BATCH_SIZE, tmp_dir,
-                           FACE_CONFIDENCE, min_spatial=MIN_SPATIAL,
-                           skip_frames=EVERY_NTH_FRAME,
-                           crop_frames=CROP_FRAMES, resize_frames=RESIZE_FRAMES,
-                           start_at_frame=BEGIN_FRAME, stop_at_frame=MAX_FRAMES,
-                           save_crops=True)
-    faces.load_detector(DETECTOR, detector_weights[DETECTOR])
+    faces = FaceEmbeddings(out_dir, detections_filepath, configs['BATCH_SIZE'],
+                           tmp_dir,
+                           configs['FACE_CONFIDENCE'], min_spatial=configs['MIN_SPATIAL'],
+                           skip_frames=configs['EVERY_NTH_FRAME'],crop_frames=configs['CROP_FRAMES'], 
+                           resize_frames=configs['RESIZE_FRAMES'],start_at_frame=configs['BEGIN_FRAME'], 
+                           stop_at_frame=configs['MAX_FRAMES'],save_crops=True)
+    faces.load_detector(configs['DETECTOR'], detector_weights[configs['DETECTOR']])
     # iterate over video-frames, detect faces and get embeddings
-    video_files = get_file_list(video_dir, VIDEO_EXTENSIONS)
+    video_files = get_file_list(video_dir, configs['VIDEO_EXTENSIONS'])
     faces.run(video_files)
     
 #TODO
