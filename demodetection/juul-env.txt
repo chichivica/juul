@@ -1,0 +1,5 @@
+export INPUT_VIDEO=rtsp://admin:41cdf8b4@192.168.0.2/Streaming/Channels/101
+export FACE_BOX_MINSIZE=100
+export GPU_DEVICE=cuda:0
+export FACE_CONFIDENCE=0.9
+export OUT_CODEC=X264
