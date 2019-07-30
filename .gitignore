@@ -3,6 +3,7 @@ process/models/
 process/data/
 process/*.txt
 *tar.gz
+*tar
 stream/data/
 stream/tmp/
 __pycache__

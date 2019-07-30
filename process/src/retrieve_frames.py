@@ -42,36 +42,32 @@ def get_frame_number(full_path):
 
 
 def grab_retrieve_frames(video_path, frames, out_dir, video_boxes,
-                         x_offset=0, y_offset=0,
-                         image_extension='jpg'):
+                         x_offset=0, y_offset=0,):
     '''
     Skip thru a video and save specified frames as images
     drawing bounding boxes on the fly
     '''
     frames = sorted(frames)
     cap = cv2.VideoCapture(video_path)
-    for f in tqdm(range(max(frames)), desc='Frames'):
-        ret = cap.grab()
+    for f in tqdm(frames, desc='Frames'):
+        ret = cap.set(cv2.CAP_PROP_POS_FRAMES, f)
         if not ret:
             print(f'Could not read {f} frame from {video_path}')
             break
         else:
-            if f in frames:
-                ret,frame = cap.retrieve()
-                if ret:
-                    filepath = make_new_path(video_path, f, out_dir, 
-                                         image_extension)
-                    image_boxes = video_boxes.loc[(video_boxes['frame'] == f), 
-                                                  'box']
-                    image_boxes = np.array(list(map(eval, image_boxes)))
-                    image_boxes[:,::2] += x_offset
-                    image_boxes[:,1::2] += y_offset
-                    draw_rectangles(frame, image_boxes)
-                    cv2.imwrite(filepath, frame)
-                else:
-                    if not ret:
-                        print(f'Could not read {f} frame from {video_path}')
-                        break
+            ret,frame = cap.read()
+            if ret:
+                filepath = make_new_path(video_path, f, out_dir)
+                image_boxes = video_boxes.loc[(video_boxes['frame'] == f), 
+                                              'box']
+                image_boxes = np.array(list(map(eval, image_boxes)))
+                image_boxes[:,::2] += x_offset
+                image_boxes[:,1::2] += y_offset
+                draw_rectangles(frame, image_boxes)
+                cv2.imwrite(filepath, frame)
+            else:
+                print(f'Could not read {f} frame from {video_path}')
+                break
     cap.release()
     
     
@@ -97,8 +93,8 @@ if __name__ == '__main__':
                                                                        date=q_date),
                              depth=FILE_DEPTH)
     out_dir = get_abs_path(__file__, configs['WRITE_FRAMES'].format(name=q_name,
-                                                                       date=q_date), 
-                        depth=FILE_DEPTH)
+                                                                    date=q_date), 
+                            depth=FILE_DEPTH)
     create_dir(out_dir, True)
     top_adjust = configs['CROP_FRAMES']['top']
     left_adjust = configs['CROP_FRAMES']['left']
@@ -136,5 +132,8 @@ if __name__ == '__main__':
     data['photo_end'] = data.apply(lambda x: make_new_path(x['video_end'], 
                                         x['frame_end'], out_dir),
                                      axis=1)
+    bex = data['photo_begin'].apply(lambda x: os.path.exists(x))
+    eex = data['photo_end'].apply(lambda x: os.path.exists(x))
+    print(f'{sum(bex) + sum(eex)} out of {len(bex) + len(eex)} photos exist')
     data[['cluster','time_min','time_max','photo_begin','photo_end']]\
             .to_csv(data_path, index=False)
