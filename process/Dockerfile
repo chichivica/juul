@@ -46,14 +46,12 @@ RUN dpkg-reconfigure -f noninteractive tzdata
 WORKDIR /root/people_count
 COPY models ./models
 COPY src ./src
-COPY run.sh . 
+COPY *.sh ./
 COPY crontab-jobs.txt . 
 
 # create cron jobs and log files
 RUN service cron restart
 RUN crontab crontab-jobs.txt
-RUN mkfifo --mode 0666 people-count.logs
-RUN mkfifo --mode 0666 people-count-error.logs
 
 RUN chmod 777 run.sh
 RUN chmod 777 src/face_detector.py
@@ -61,4 +59,4 @@ RUN chmod 777 src/facenet_embeddings.py
 RUN chmod 777 src/cluster_faces.py
 RUN chmod 777 src/write_results.py
 
-CMD ["cron", "-f"]
+CMD ["./entrypoint.sh"]

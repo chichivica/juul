@@ -9,5 +9,4 @@
 #
 # m h  dom mon dow   command
 
-#* * * * * echo $(date) >> /root/people_count/cron.logs
-10 0 * * * /root/people_count/run.sh juul 1 >> /root/people_count/people-count.logs 2> /root/people_count/people-count-error.logs
+1 0 * * * /root/people_count/run.sh 1 juul > /proc/1/fd/1 2> /proc/1/fd/2

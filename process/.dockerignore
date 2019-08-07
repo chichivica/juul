@@ -1,6 +1,6 @@
 data/
 notebooks/
-*tar.gz
+*tar*
 __pycache__
 .ipynb_checkpoints
 
