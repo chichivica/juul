@@ -18,6 +18,7 @@
 - запуск контейнера:
     ```
     docker run -d --name project_crontime --runtime nvidia \
+        --shm-size 6G \
         -e "DB_PASSWORD=pwd" --env-file path_to_envfile.txt \
         -v /mnt:/mnt --restart always people-count:project
     ```

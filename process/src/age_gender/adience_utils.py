@@ -2,7 +2,7 @@
 import os
 import pandas as pd
 import numpy as np
-import skimage
+import matplotlib.pyplot as plt
 import cv2
 from tqdm import tqdm
 
@@ -41,7 +41,7 @@ def facial_keypoints(image_paths, keypoint_paths, num_random=None,
         image_paths = np.array(image_paths)[indices]
         keypoint_paths = np.array(keypoint_paths)[indices]
     for ip,kp in tqdm(zip(image_paths, keypoint_paths)):
-        img = skimage.io.imread(ip)
+        img = plt.imread(ip)
         lmk = pd.read_table(kp, skiprows=1, sep=',')
         if keypoints:
             for _,row in lmk.iterrows():
@@ -52,7 +52,7 @@ def facial_keypoints(image_paths, keypoint_paths, num_random=None,
             img = img[top:bottom, left:right, :]
         if save_dir:
             save_path = os.path.join(save_dir, os.path.basename(ip))
-            skimage.io.imsave(save_path, img)
+            plt.imsave(save_path, img)
             images.append(save_path)
         else:
             images.append(img)

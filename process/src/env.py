@@ -32,7 +32,7 @@ configs = dict(
     WRITE_CLUSTERS = os.environ.get('WRITE_CLUSTERS','data/interim/clusters/{name}.npy'),
     WRITE_SILHOUETTE = os.environ.get('WRITE_SILHOUETTE', 'data/interim/clusters/{name}_silhouette.csv'),
     WRITE_RESULTS = os.environ.get('WRITE_RESULTS','data/processed/clusters/{name}_{date}.csv'),
-    WRITE_DEMOGRAPHICS = os.environ.get('WRITE_DEMOGRAPHICS', 'data/processed/clusters/{name}_{date}_demographics.pkl'),
+    WRITE_DEMOGRAPHICS = os.environ.get('WRITE_DEMOGRAPHICS', 'data/processed/clusters/{name}_{date}_demographics.csv'),
     WRITE_FRAMES = os.environ.get('WRITE_FRAMES', 'data/processed/juul_photos/{name}_{date}/'),
     VIDEO_EXTENSIONS = os.environ.get('VIDEO_EXTENSIONS', 'mp4').split(','),
     RECOGNITION_MODEL_PATH = {
@@ -51,11 +51,26 @@ configs = dict(
         'dlib': os.environ.get('DLIB_CNN_DETECTOR_WEIGHTS', 
                                '/home/neuro/dlib/mmod_human_face_detector.dat'),
                 },
+    DEMOGRAPHIC = {
+        'vggface': os.environ.get('VGGFACE_WEIGHTS',
+                                  'models/external/resnet50_ft_weight.pkl'),
+        'vggface_backbone': os.environ.get('VGGFACE_BACKBONE', 'resnet'),
+        'age': os.environ.get('AGE_CLASSIFIER_WEIGHTS',
+                              'models/age_gender/best/vgg_age_cv{index}.hdf'),
+        'age_out_classes': int(os.environ.get('AGE_OUT_CLASSES', '8')),
+        'gender': os.environ.get('GENDER_CLASSIFIER_WEIGHTS',
+                                 'models/age_gender/best/vgg_gender_cv{index}.hdf'),
+        'gender_out_classes': int(os.environ.get('GENDER_OUT_CLASSES', '1')),
+        'num_folds': int(os.environ.get('DEMOGRAPHIC_CV_FOLDS', '5')),
+        'input_size': eval(os.environ.get('DEMOGRAPHIC_MODEL_INPUT_SIZE',
+                                          '(224,224)')),
+        'batch_size': int(os.environ.get('DEMOGRAPHIC_BATCH_SIZE', '64')),
+            },
     DB_CONNECTION = dict(
         dbname = os.environ.get('DB_NAME', 'juuldb'),
         user = os.environ.get('DB_USER', 'neurus'),
         password = os.environ.get('DB_PASSWORD', ''),
-        host = os.environ.get('DB_HOST', '172.17.0.2'),
+        host = os.environ.get('DB_HOST', '172.17.0.3'),
         port = os.environ.get('DB_PORT', '5432'),)
     )
     
