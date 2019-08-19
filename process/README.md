@@ -23,6 +23,16 @@
         -e "DB_PASSWORD=pwd" --env-file path_to_envfile.txt \
         -v /mnt:/mnt --restart always people-count:project
     ```
+    
+##### Запуск отдельного дня
+
+```
+docker exec container_name bash run.sh n name
+```
+, где:
+- заменить n на кол-во дней назад, например 7 для одной недели или 2 для позавчера
+- заменить name на любое имя, которое будет добавляться в название путей
+    
 
 ### Алгоритмы
 
